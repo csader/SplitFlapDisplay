@@ -45,18 +45,21 @@ body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--t
 .flap-half{
   position:absolute;left:0;right:0;height:50%;overflow:hidden;
   background:var(--flap-bg);border:1px solid #333;
-  display:flex;align-items:center;justify-content:center;
-  color:#fff;
 }
 .flap-top{top:0;border-radius:2px 2px 0 0;border-bottom:none}
 .flap-bottom{bottom:0;border-radius:0 0 2px 2px;border-top:none}
-.flap-top .flap-char{transform:translateY(50%)}
-.flap-bottom .flap-char{transform:translateY(-50%)}
+.flap-char{
+  position:absolute;left:0;right:0;
+  height:200%;/* span full flap height from within a 50% container */
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;
+}
+.flap-top .flap-char{top:0}
+.flap-bottom .flap-char{bottom:0}
 
 /* Flip pieces */
 .flap-flip{position:absolute;left:0;right:0;height:50%;overflow:hidden;z-index:2;
-  background:var(--flap-bg);border:1px solid #333;color:#fff;
-  display:flex;align-items:center;justify-content:center;
+  background:var(--flap-bg);border:1px solid #333;
   backface-visibility:hidden;
 }
 .flap-flip-down{
@@ -64,14 +67,14 @@ body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--t
   transform-origin:bottom center;
   animation:flipDown var(--flip-speed,.12s) ease-in forwards;
 }
-.flap-flip-down .flap-char{transform:translateY(50%)}
+.flap-flip-down .flap-char{top:0}
 .flap-flip-up{
   bottom:0;border-radius:0 0 2px 2px;border-top:none;
   transform-origin:top center;transform:rotateX(90deg);
   animation:flipUp var(--flip-speed,.12s) ease-out forwards;
   animation-delay:var(--flip-speed,.12s);
 }
-.flap-flip-up .flap-char{transform:translateY(-50%)}
+.flap-flip-up .flap-char{bottom:0}
 
 @keyframes flipDown{from{transform:rotateX(0)}to{transform:rotateX(-90deg)}}
 @keyframes flipUp{from{transform:rotateX(90deg)}to{transform:rotateX(0)}}
