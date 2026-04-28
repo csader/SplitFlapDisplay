@@ -143,6 +143,12 @@ input:checked+.slider:before{transform:translateX(20px)}
 .at-btn-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:10px}
 .at-step-input{width:70px;background:#111;color:#fff;border:1px solid #555;border-radius:4px;padding:6px 8px;font-size:.9rem;text-align:center}
 
+/* ── TEACH MODE ── */
+#teachModeOverlay .modal-content{max-width:720px}
+.tm-progress-bar{width:100%;height:8px;background:#333;border-radius:4px;margin:10px 0;overflow:hidden}
+.tm-progress-fill{height:100%;background:var(--green);border-radius:4px;transition:width .3s}
+.tm-nudge-row{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin:12px 0}
+
 /* ── TOAST ── */
 .toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:999;pointer-events:none}
 .toast{background:#333;color:#fff;padding:12px 18px;border-radius:8px;font-size:.9rem;border-left:4px solid var(--green);opacity:0;transform:translateY(10px);transition:.3s;pointer-events:none;max-width:280px}
@@ -313,6 +319,7 @@ input:checked+.slider:before{transform:translateX(20px)}
         <h3 style="margin:0">Hardware Inspector</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-warning btn-sm" onclick="openAutoTune()">🎯 AUTO FINE-TUNE</button>
+          <button class="btn btn-sm" style="background:#6f42c1;color:#fff" onclick="openTeachMode()">📖 TEACH MODE</button>
           <button class="btn btn-success btn-sm" onclick="syncAllFromHardware()">SYNC ALL (EEPROM)</button>
           <button class="btn btn-warning btn-sm" onclick="homeAll()">HOME ALL</button>
         </div>
@@ -501,6 +508,84 @@ input:checked+.slider:before{transform:translateX(20px)}
       <h3 style="color:var(--green)">Fine-Tuning Complete!</h3>
       <p style="color:#888">All corrections have been saved to EEPROM and settings.json.</p>
       <button class="btn btn-success" style="margin-top:12px" onclick="closeAutoTune()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ TEACH MODE OVERLAY ══════════ -->
+<div class="modal-overlay" id="teachModeOverlay">
+  <div class="modal-content" style="max-width:720px">
+    <!-- Start screen -->
+    <div id="tmStart">
+      <h3 style="color:#6f42c1;margin-bottom:12px">📖 Teach Mode</h3>
+      <p style="color:#aaa;font-size:.9rem;line-height:1.6">
+        Step through every character one by one. For each character, tap any modules
+        that look wrong and nudge them until they're right, then advance.
+      </p>
+      <div style="margin:14px 0">
+        <label class="field-label">Step Size</label>
+        <input type="number" id="tmStepSize" value="3" min="1" max="100" class="at-step-input" style="width:100%">
+        <div style="color:#666;font-size:.75rem;margin-top:4px">Steps per nudge click. Smaller = more precise.</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn btn-success" style="flex:1" onclick="tmBegin()">Home All &amp; Begin</button>
+        <button class="btn" style="background:#333;color:#aaa;border:1px solid #555" onclick="closeTeachMode()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Homing screen -->
+    <div id="tmHoming" style="display:none;text-align:center;padding:40px 0">
+      <div style="font-size:2rem;margin-bottom:12px">⏳</div>
+      <div style="font-size:1.1rem;font-weight:bold;margin-bottom:8px">Homing all 45 modules…</div>
+      <div style="color:#888" id="tmHomingCountdown">Please wait ~12 seconds</div>
+    </div>
+
+    <!-- Active card -->
+    <div id="tmActive" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <h3 style="margin:0;color:#6f42c1">Teach Mode</h3>
+        <div style="display:flex;gap:6px;align-items:center">
+          <label style="color:#888;font-size:.8rem">Step:
+            <input type="number" id="tmStepSizeActive" value="3" min="1" max="200" class="at-step-input" style="width:55px">
+          </label>
+          <button class="btn btn-secondary btn-sm" onclick="tmFinishEarly()">Finish</button>
+        </div>
+      </div>
+
+      <div class="tm-progress-bar"><div class="tm-progress-fill" id="tmProgressFill" style="width:0%"></div></div>
+      <div style="text-align:center;color:#888;font-size:.85rem;margin-bottom:8px" id="tmProgressText">Character 0 of 63</div>
+
+      <div style="text-align:center">
+        <div class="at-char-display" id="tmCharBox">?</div>
+      </div>
+
+      <div style="text-align:center;padding:8px;background:#111;border-radius:8px;margin:10px 0;font-size:.9rem;color:#aaa">
+        Tap modules that look <strong style="color:#f55">wrong</strong>, then nudge. When all look good, hit <strong style="color:var(--green)">Next</strong>.
+      </div>
+
+      <div class="at-grid" id="tmGrid"></div>
+
+      <div class="tm-nudge-row">
+        <button class="btn-adj neg" onclick="tmNudge(-5)">−5x</button>
+        <button class="btn-adj neg" onclick="tmNudge(-1)">− Nudge</button>
+        <button class="btn btn-sm" style="background:#555;color:#fff" onclick="tmSelectNone()">Clear</button>
+        <button class="btn-adj pos" onclick="tmNudge(1)">+ Nudge</button>
+        <button class="btn-adj pos" onclick="tmNudge(5)">+5x</button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-secondary" style="flex:1" onclick="tmPrev()" id="tmPrevBtn" disabled>← Prev</button>
+        <button class="btn btn-success" style="flex:2" onclick="tmNext()">Looks Good → Next</button>
+      </div>
+    </div>
+
+    <!-- Done screen -->
+    <div id="tmDone" style="display:none;text-align:center;padding:30px 0">
+      <div style="font-size:2.5rem;margin-bottom:12px">✅</div>
+      <h3 style="color:var(--green)">Teach Mode Complete!</h3>
+      <p style="color:#888">All corrections saved to EEPROM and settings.</p>
+      <p style="color:#aaa;font-size:.9rem" id="tmSummary"></p>
+      <button class="btn btn-success" style="margin-top:12px" onclick="closeTeachMode()">Close</button>
     </div>
   </div>
 </div>
@@ -1611,6 +1696,153 @@ function atFinish(){
   if(!confirm('End fine-tuning? All corrections so far are already saved.')) return;
   document.getElementById('atActive').style.display='none';
   document.getElementById('atDone').style.display='block';
+}
+
+
+// ============================================================
+//  TEACH MODE
+// ============================================================
+const tm = { charIdx:0, stepSize:3, selected:new Set(), positions:{}, screen:'start', adjustedChars:new Set() };
+
+function openTeachMode(){
+  document.getElementById('teachModeOverlay').style.display='flex';
+  document.getElementById('tmStart').style.display='block';
+  document.getElementById('tmHoming').style.display='none';
+  document.getElementById('tmActive').style.display='none';
+  document.getElementById('tmDone').style.display='none';
+}
+
+function closeTeachMode(){
+  document.getElementById('teachModeOverlay').style.display='none';
+  if(globalSettings) loadSettingsData();
+}
+
+async function tmBegin(){
+  tm.stepSize = parseInt(document.getElementById('tmStepSize').value) || 3;
+  tm.charIdx = 0;
+  tm.adjustedChars.clear();
+
+  document.getElementById('tmStart').style.display='none';
+  document.getElementById('tmHoming').style.display='block';
+
+  await fetch('/stop_app', {method:'POST'});
+  await fetch('/auto_tune', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'home'})
+  });
+
+  const cdEl = document.getElementById('tmHomingCountdown');
+  for(let i=12; i>0; i--){
+    cdEl.textContent = `${i} seconds remaining…`;
+    await new Promise(r=>setTimeout(r, 1000));
+  }
+
+  document.getElementById('tmStepSizeActive').value = tm.stepSize;
+  document.getElementById('tmHoming').style.display='none';
+  document.getElementById('tmActive').style.display='block';
+
+  tmGoToChar(0);
+}
+
+async function tmGoToChar(idx){
+  tm.charIdx = idx;
+  tm.selected.clear();
+
+  document.getElementById('tmPrevBtn').disabled = (idx === 0);
+
+  const pct = ((idx / 63) * 100).toFixed(0);
+  document.getElementById('tmProgressFill').style.width = pct + '%';
+  document.getElementById('tmProgressText').textContent = `Character ${idx} of 63`;
+
+  const ch = charDisplay(idx);
+  document.getElementById('tmCharBox').textContent = ch;
+  document.getElementById('tmCharBox').title = `Index ${idx}: "${CHAR_MAP[idx]}"`;
+
+  await fetch('/auto_tune', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'goto_char', char_index: idx})
+  });
+
+  const res = await fetch('/auto_tune', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'get_positions', char_index: idx})
+  });
+  const data = await res.json();
+  tm.positions = data.positions || {};
+
+  tmRenderGrid();
+}
+
+function tmRenderGrid(){
+  const grid = document.getElementById('tmGrid');
+  grid.innerHTML = '';
+  for(let i=0; i<45; i++){
+    const cell = document.createElement('div');
+    cell.className = 'at-cell';
+    cell.textContent = i.toString().padStart(2,'0');
+    const pos = tm.positions[i.toString()];
+    if(pos && pos.tuned !== null) cell.classList.add('tuned-indicator');
+    if(tm.selected.has(i)) cell.classList.add('sel-ahead');
+    cell.onclick = () => {
+      if(tm.selected.has(i)) tm.selected.delete(i);
+      else tm.selected.add(i);
+      tmRenderGrid();
+    };
+    grid.appendChild(cell);
+  }
+}
+
+function tmSelectNone(){ tm.selected.clear(); tmRenderGrid(); }
+
+async function tmNudge(multiplier){
+  if(!tm.selected.size){ showToast('No modules selected','warn'); return; }
+  const step = parseInt(document.getElementById('tmStepSizeActive').value) || tm.stepSize;
+  const delta = step * multiplier;
+  const modules = Array.from(tm.selected);
+
+  await fetch('/auto_tune', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'adjust', modules:modules, char_index:tm.charIdx, delta:delta })
+  });
+
+  tm.adjustedChars.add(tm.charIdx);
+  showToast(`Applied ${delta>0?'+':''}${delta} to ${modules.length} modules`);
+
+  await fetch('/auto_tune', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'goto_char', char_index: tm.charIdx})
+  });
+
+  const res = await fetch('/auto_tune', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'get_positions', char_index: tm.charIdx})
+  });
+  const data = await res.json();
+  tm.positions = data.positions || {};
+  tmRenderGrid();
+}
+
+function tmNext(){
+  if(tm.charIdx >= 63){
+    document.getElementById('tmActive').style.display='none';
+    document.getElementById('tmDone').style.display='block';
+    document.getElementById('tmSummary').textContent =
+      `Adjusted ${tm.adjustedChars.size} of 64 characters.`;
+    return;
+  }
+  tmGoToChar(tm.charIdx + 1);
+}
+
+function tmPrev(){
+  if(tm.charIdx > 0) tmGoToChar(tm.charIdx - 1);
+}
+
+function tmFinishEarly(){
+  if(!confirm('End teach mode? All corrections so far are already saved.')) return;
+  document.getElementById('tmActive').style.display='none';
+  document.getElementById('tmDone').style.display='block';
+  document.getElementById('tmSummary').textContent =
+    `Adjusted ${tm.adjustedChars.size} characters (stopped at index ${tm.charIdx}).`;
 }
 
 
