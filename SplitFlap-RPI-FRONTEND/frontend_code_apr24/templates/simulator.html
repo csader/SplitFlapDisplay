@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Split-Flap Simulator</title>
+<style>
+:root {
+  --bg:#0a0a0a; --panel:#1a1a1a; --border:#333;
+  --accent:#007bff; --accent-hover:#0056b3;
+  --text:#e0e0e0; --text-muted:#888;
+  --green:#28a745; --orange:#fd7e14; --red:#dc3545;
+  --flap-bg:#111;
+}
+*{box-sizing:border-box}
+body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px;display:flex;flex-direction:column;align-items:center}
+.container{width:100%;max-width:1200px}
+
+/* ── TOOLBAR ── */
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;padding:12px 16px;background:var(--panel);border:1px solid var(--border);border-radius:10px}
+.toolbar h2{margin:0;font-size:1.1rem;flex:1;white-space:nowrap}
+.toolbar label{font-size:.82rem;color:var(--text-muted);display:flex;align-items:center;gap:4px}
+.toolbar select,.toolbar input[type=number]{background:#111;color:#fff;border:1px solid #555;border-radius:4px;padding:4px 6px;font-size:.85rem;width:60px}
+.toolbar select{width:auto}
+.btn{padding:8px 14px;border-radius:6px;border:none;font-weight:bold;cursor:pointer;transition:.2s;font-size:.85rem}
+.btn:active{transform:scale(.98)}
+.btn-success{background:var(--green);color:#fff}
+.btn-warning{background:var(--orange);color:#fff}
+.btn-secondary{background:#444;color:#fff}
+.btn-danger{background:var(--red);color:#fff}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-sm{padding:6px 10px;font-size:.8rem}
+
+/* ── DISPLAY ── */
+.display-wrapper{background:#000;padding:16px;border-radius:10px;border:2px solid #444;margin-bottom:16px;box-shadow:0 6px 20px rgba(0,0,0,.6)}
+.display-label{text-align:center;color:#555;font-size:.75rem;font-weight:bold;letter-spacing:2px;margin-bottom:8px}
+.sim-grid{display:grid;gap:3px}
+.sim-flap{aspect-ratio:2/3;background:var(--flap-bg);border:1px solid #333;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff;border-radius:2px;font-size:clamp(.7rem,2vw,1.4rem);position:relative;overflow:hidden;user-select:none}
+.sim-flap .flap-split{position:absolute;left:0;right:0;height:1px;top:50%;background:#000;z-index:1}
+
+/* ── ACTIVE APP BANNER ── */
+.app-banner{display:none;align-items:center;gap:10px;background:#1a2a1a;border:1px solid var(--green);border-radius:8px;padding:8px 14px;margin-bottom:12px}
+.app-banner.visible{display:flex}
+.app-banner .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.app-banner .label{flex:1;font-weight:600;font-size:.85rem}
+
+/* ── SECTIONS ── */
+.section{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px}
+.section h3{margin:0 0 10px;font-size:.95rem;color:var(--text-muted)}
+
+/* ── COMPOSE ── */
+.compose-input{width:100%;font-size:1.1rem;background:#080808;color:#0f0;border:1px solid var(--border);margin:4px 0;padding:8px 10px;font-family:'Courier New',monospace;text-transform:uppercase;border-radius:4px}
+.compose-input:focus{outline:none;border-color:var(--accent)}
+
+/* ── APP LAUNCHER ── */
+.app-launcher{display:flex;flex-wrap:wrap;gap:6px}
+.app-btn{padding:8px 12px;background:#222;border:1px solid #444;border-radius:6px;color:var(--text);cursor:pointer;font-size:.82rem;transition:.15s}
+.app-btn:hover{background:#333;border-color:var(--accent)}
+.app-btn.running{background:#1a2a1a;border-color:var(--green);color:var(--green)}
+
+/* ── SANDBOX ── */
+.sandbox{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sandbox label{font-size:.82rem;color:var(--text-muted);display:flex;align-items:center;gap:4px}
+
+/* ── TOAST ── */
+.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:999;pointer-events:none}
+.toast{background:#333;color:#fff;padding:10px 16px;border-radius:8px;font-size:.85rem;border-left:4px solid var(--green);opacity:0;transform:translateY(10px);transition:.3s;pointer-events:none;max-width:260px}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.error{border-left-color:var(--red)}
+
+@media(max-width:600px){
+  body{padding:10px}
+  .toolbar{gap:6px;padding:8px 10px}
+  .toolbar h2{font-size:.9rem}
+  .display-wrapper{padding:8px}
+  .sim-flap{font-size:.65rem}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- TOOLBAR -->
+  <div class="toolbar">
+    <h2>Split-Flap Simulator</h2>
+    <label>Rows <input type="number" id="cfgRows" value="3" min="1" max="20"></label>
+    <label>Cols <input type="number" id="cfgCols" value="15" min="1" max="50"></label>
+    <button class="btn btn-primary btn-sm" onclick="applyGridConfig()">Apply</button>
+    <a href="/" class="btn btn-secondary btn-sm" style="text-decoration:none">Control UI</a>
+  </div>
+
+  <!-- ACTIVE APP BANNER -->
+  <div class="app-banner" id="appBanner">
+    <div class="dot"></div>
+    <span class="label" id="appBannerLabel">APP</span>
+    <button class="btn btn-danger btn-sm" onclick="stopApp()">Stop</button>
+  </div>
+
+  <!-- DISPLAY -->
+  <div class="display-wrapper">
+    <div class="display-label">SIMULATED DISPLAY</div>
+    <div class="sim-grid" id="simGrid"></div>
+  </div>
+
+  <!-- SANDBOX CONTROLS -->
+  <div class="section">
+    <div class="sandbox">
+      <button class="btn btn-warning btn-sm" onclick="homeAll()">Home All</button>
+      <button class="btn btn-secondary btn-sm" id="pauseBtn" onclick="togglePause()">Pause</button>
+      <button class="btn btn-secondary btn-sm" onclick="stepOnce()" id="stepBtn" disabled>Step</button>
+      <label>Poll <input type="range" id="pollInterval" min="200" max="5000" value="1000" step="100" oninput="updatePollInterval()"> <span id="pollVal">1.0s</span></label>
+    </div>
+  </div>
+
+  <!-- COMPOSE -->
+  <div class="section">
+    <h3>Compose</h3>
+    <div id="composeArea"></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-success" style="flex:1" onclick="sendCompose()">Send to Display</button>
+      <button class="btn btn-secondary btn-sm" onclick="clearCompose()">Clear</button>
+    </div>
+  </div>
+
+  <!-- APP LAUNCHER -->
+  <div class="section">
+    <h3>Apps</h3>
+    <div class="app-launcher" id="appLauncher"></div>
+  </div>
+
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+const CHAR_MAP = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$&()-+=;\":%'.,/?*roygbpw";
+const STATE_DISPLAY = {'r':'🟥','o':'🟧','y':'🟨','g':'🟩','b':'🟦','p':'🟪','w':'⬜','q':'"'};
+
+const APPS = [
+  {key:'time',       icon:'🕐', name:'Time'},
+  {key:'date',       icon:'📅', name:'Date'},
+  {key:'weather',    icon:'🌤️', name:'Weather'},
+  {key:'dashboard',  icon:'📊', name:'Dashboard'},
+  {key:'countdown',  icon:'⏳', name:'Countdown'},
+  {key:'world_clock',icon:'🌍', name:'World Clock'},
+  {key:'metro',      icon:'🚇', name:'Metro'},
+  {key:'stocks',     icon:'📈', name:'Stocks'},
+  {key:'sports',     icon:'🏒', name:'Sports'},
+  {key:'youtube',    icon:'▶️', name:'YouTube'},
+  {key:'yt_comments',icon:'💬', name:'YT Comments'},
+  {key:'crypto',     icon:'₿',  name:'Crypto'},
+  {key:'iss',        icon:'🛸', name:'ISS'},
+  {key:'livestream', icon:'🔴', name:'Livestream'},
+  {key:'demo',       icon:'🎬', name:'Demo'},
+  {key:'anim_rainbow',  icon:'🌈', name:'Rainbow'},
+  {key:'anim_sweep',    icon:'〰️', name:'Sweep'},
+  {key:'anim_twinkle',  icon:'✨', name:'Twinkle'},
+  {key:'anim_checker',  icon:'🏁', name:'Checker'},
+  {key:'anim_matrix',   icon:'💻', name:'Matrix'},
+];
+
+let currentRows = 3, currentCols = 15;
+let activeApp = null;
+let paused = false;
+let pollMs = 1000;
+let pollTimer = null;
+let lastState = '';
+
+// ── Grid ──
+
+function buildGrid(rows, cols) {
+  currentRows = rows;
+  currentCols = cols;
+  const grid = document.getElementById('simGrid');
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.innerHTML = '';
+  for (let i = 0; i < rows * cols; i++) {
+    const flap = document.createElement('div');
+    flap.className = 'sim-flap';
+    flap.dataset.index = i;
+    const split = document.createElement('div');
+    split.className = 'flap-split';
+    flap.appendChild(split);
+    grid.appendChild(flap);
+  }
+  buildComposeInputs(rows, cols);
+  document.getElementById('cfgRows').value = rows;
+  document.getElementById('cfgCols').value = cols;
+}
+
+function updateDisplay(state) {
+  if (state === lastState) return;
+  lastState = state;
+  const flaps = document.querySelectorAll('.sim-flap');
+  for (let i = 0; i < flaps.length; i++) {
+    const ch = state[i] || ' ';
+    const disp = STATE_DISPLAY[ch] || ch;
+    // Keep the split line, update text
+    const textNode = flaps[i].childNodes[1];
+    if (textNode && textNode.nodeType === 3) {
+      textNode.textContent = disp === ' ' ? '' : disp;
+    } else {
+      // First time or missing text node
+      if (flaps[i].childNodes.length > 1) {
+        flaps[i].removeChild(flaps[i].lastChild);
+      }
+      flaps[i].appendChild(document.createTextNode(disp === ' ' ? '' : disp));
+    }
+  }
+}
+
+async function applyGridConfig() {
+  const rows = parseInt(document.getElementById('cfgRows').value) || 3;
+  const cols = parseInt(document.getElementById('cfgCols').value) || 15;
+  await fetch('/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'save_global', sim_rows: rows, sim_cols: cols})
+  });
+  buildGrid(rows, cols);
+  lastState = '';
+  showToast(`Grid set to ${rows}x${cols}`);
+}
+
+// ── Polling ──
+
+async function poll() {
+  try {
+    const data = await fetch('/current_state').then(r => r.json());
+    const rows = data.rows || 3;
+    const cols = data.cols || 15;
+    if (rows !== currentRows || cols !== currentCols) {
+      buildGrid(rows, cols);
+    }
+    updateDisplay(data.state || '');
+
+    // Update app banner
+    activeApp = data.active_app;
+    const banner = document.getElementById('appBanner');
+    if (activeApp) {
+      banner.classList.add('visible');
+      const app = APPS.find(a => a.key === activeApp);
+      document.getElementById('appBannerLabel').textContent =
+        `${app ? app.icon + ' ' : ''}${activeApp} running`;
+    } else {
+      banner.classList.remove('visible');
+    }
+
+    // Highlight active app button
+    document.querySelectorAll('.app-btn').forEach(btn => {
+      btn.classList.toggle('running', btn.dataset.app === activeApp);
+    });
+  } catch (e) {}
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(poll, pollMs);
+  poll();
+}
+
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('pauseBtn');
+  const step = document.getElementById('stepBtn');
+  if (paused) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+    btn.textContent = 'Resume';
+    btn.classList.remove('btn-secondary');
+    btn.classList.add('btn-success');
+    step.disabled = false;
+  } else {
+    btn.textContent = 'Pause';
+    btn.classList.remove('btn-success');
+    btn.classList.add('btn-secondary');
+    step.disabled = true;
+    startPolling();
+  }
+}
+
+function stepOnce() { poll(); }
+
+function updatePollInterval() {
+  pollMs = parseInt(document.getElementById('pollInterval').value);
+  document.getElementById('pollVal').textContent = (pollMs / 1000).toFixed(1) + 's';
+  if (!paused) startPolling();
+}
+
+// ── Compose ──
+
+function buildComposeInputs(rows, cols) {
+  const area = document.getElementById('composeArea');
+  area.innerHTML = '';
+  for (let r = 0; r < rows; r++) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'compose-input';
+    input.maxLength = cols;
+    input.placeholder = `LINE ${r + 1} (${cols} chars)`;
+    input.dataset.row = r;
+    area.appendChild(input);
+  }
+}
+
+async function sendCompose() {
+  const inputs = document.querySelectorAll('.compose-input');
+  const pages = [];
+  let full = '';
+  inputs.forEach(inp => {
+    let line = inp.value.toUpperCase();
+    while (line.length < currentCols) line += ' ';
+    full += line.substring(0, currentCols);
+  });
+  await fetch('/update_playlist', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pages: [full], delay: 5})
+  });
+  showToast('Sent to display');
+}
+
+function clearCompose() {
+  document.querySelectorAll('.compose-input').forEach(inp => inp.value = '');
+}
+
+// ── Apps ──
+
+function buildAppLauncher() {
+  const container = document.getElementById('appLauncher');
+  container.innerHTML = '';
+  APPS.forEach(app => {
+    const btn = document.createElement('button');
+    btn.className = 'app-btn';
+    btn.dataset.app = app.key;
+    btn.textContent = `${app.icon} ${app.name}`;
+    btn.onclick = () => launchApp(app.key);
+    container.appendChild(btn);
+  });
+}
+
+async function launchApp(key) {
+  await fetch('/run_app', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({app: key})
+  });
+  showToast(`Started ${key}`);
+}
+
+async function stopApp() {
+  await fetch('/stop_app', {method: 'POST'});
+  showToast('Stopped');
+}
+
+async function homeAll() {
+  await fetch('/home_all');
+  showToast('Homing all modules');
+}
+
+// ── Toast ──
+
+function showToast(msg, type) {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast' + (type === 'error' ? ' error' : '');
+  toast.textContent = msg;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 2500);
+}
+
+// ── Init ──
+
+(async function init() {
+  try {
+    const cfg = await fetch('/grid_config').then(r => r.json());
+    buildGrid(cfg.rows || 3, cfg.cols || 15);
+  } catch (e) {
+    buildGrid(3, 15);
+  }
+  buildAppLauncher();
+  startPolling();
+})();
+</script>
+</body>
+</html>
