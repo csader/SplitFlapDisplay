@@ -35,8 +35,49 @@ body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--t
 .display-wrapper{background:#000;padding:16px;border-radius:10px;border:2px solid #444;margin-bottom:16px;box-shadow:0 6px 20px rgba(0,0,0,.6)}
 .display-label{text-align:center;color:#555;font-size:.75rem;font-weight:bold;letter-spacing:2px;margin-bottom:8px}
 .sim-grid{display:grid;gap:3px}
-.sim-flap{aspect-ratio:2/3;background:var(--flap-bg);border:1px solid #333;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff;border-radius:2px;font-size:clamp(.7rem,2vw,1.4rem);position:relative;overflow:hidden;user-select:none}
-.sim-flap .flap-split{position:absolute;left:0;right:0;height:1px;top:50%;background:#000;z-index:1}
+
+/* ── FLAP UNIT ── */
+.sim-flap{
+  aspect-ratio:2/3;position:relative;perspective:300px;
+  font-family:'Courier New',monospace;font-size:clamp(.7rem,2vw,1.4rem);
+  user-select:none;
+}
+.flap-half{
+  position:absolute;left:0;right:0;height:50%;overflow:hidden;
+  background:var(--flap-bg);border:1px solid #333;
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;
+}
+.flap-top{top:0;border-radius:2px 2px 0 0;border-bottom:none}
+.flap-bottom{bottom:0;border-radius:0 0 2px 2px;border-top:none}
+.flap-top .flap-char{transform:translateY(50%)}
+.flap-bottom .flap-char{transform:translateY(-50%)}
+
+/* Flip pieces */
+.flap-flip{position:absolute;left:0;right:0;height:50%;overflow:hidden;z-index:2;
+  background:var(--flap-bg);border:1px solid #333;color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  backface-visibility:hidden;
+}
+.flap-flip-down{
+  top:0;border-radius:2px 2px 0 0;border-bottom:none;
+  transform-origin:bottom center;
+  animation:flipDown var(--flip-speed,.12s) ease-in forwards;
+}
+.flap-flip-down .flap-char{transform:translateY(50%)}
+.flap-flip-up{
+  bottom:0;border-radius:0 0 2px 2px;border-top:none;
+  transform-origin:top center;transform:rotateX(90deg);
+  animation:flipUp var(--flip-speed,.12s) ease-out forwards;
+  animation-delay:var(--flip-speed,.12s);
+}
+.flap-flip-up .flap-char{transform:translateY(-50%)}
+
+@keyframes flipDown{from{transform:rotateX(0)}to{transform:rotateX(-90deg)}}
+@keyframes flipUp{from{transform:rotateX(90deg)}to{transform:rotateX(0)}}
+
+/* Split line */
+.flap-divider{position:absolute;left:0;right:0;height:1px;top:50%;background:#000;z-index:3}
 
 /* ── ACTIVE APP BANNER ── */
 .app-banner{display:none;align-items:center;gap:10px;background:#1a2a1a;border:1px solid var(--green);border-radius:8px;padding:8px 14px;margin-bottom:12px}
@@ -87,6 +128,7 @@ body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--t
     <label>Rows <input type="number" id="cfgRows" value="3" min="1" max="20"></label>
     <label>Cols <input type="number" id="cfgCols" value="15" min="1" max="50"></label>
     <button class="btn btn-primary btn-sm" onclick="applyGridConfig()">Apply</button>
+    <label>Flip <input type="range" id="flipSpeed" min="30" max="400" value="100" oninput="updateFlipSpeed()"> <span id="flipVal">100ms</span></label>
     <a href="/" class="btn btn-secondary btn-sm" style="text-decoration:none">Control UI</a>
   </div>
 
@@ -165,7 +207,104 @@ let activeApp = null;
 let paused = false;
 let pollMs = 1000;
 let pollTimer = null;
-let lastState = '';
+let flaps = [];
+let flipSpeedMs = 100;
+
+function charDisplay(ch) { return STATE_DISPLAY[ch] || ch; }
+
+// ── FlapUnit class ──
+
+class FlapUnit {
+  constructor(el, index) {
+    this.el = el;
+    this.index = index;
+    this.currentIdx = 0;
+    this.targetIdx = 0;
+    this.animating = false;
+    this.queue = null;
+    this.render(CHAR_MAP[0]);
+  }
+
+  render(ch) {
+    const d = charDisplay(ch);
+    const top = this.el.querySelector('.flap-top .flap-char');
+    const bot = this.el.querySelector('.flap-bottom .flap-char');
+    if (top) top.textContent = d === ' ' ? '' : d;
+    if (bot) bot.textContent = d === ' ' ? '' : d;
+  }
+
+  setTarget(charIdx, delayMs) {
+    this.targetIdx = charIdx;
+    if (this.currentIdx === this.targetIdx) return;
+    if (this.animating) { this.queue = charIdx; return; }
+    setTimeout(() => this.step(), delayMs);
+  }
+
+  step() {
+    if (this.currentIdx === this.targetIdx) {
+      this.animating = false;
+      if (this.queue !== null) {
+        this.targetIdx = this.queue;
+        this.queue = null;
+        if (this.currentIdx !== this.targetIdx) this.step();
+      }
+      return;
+    }
+    this.animating = true;
+    const nextIdx = (this.currentIdx + 1) % 64;
+    const oldCh = CHAR_MAP[this.currentIdx];
+    const newCh = CHAR_MAP[nextIdx];
+    this.flip(oldCh, newCh, () => {
+      this.currentIdx = nextIdx;
+      this.render(newCh);
+      this.step();
+    });
+  }
+
+  flip(fromCh, toCh, onDone) {
+    const fromD = charDisplay(fromCh);
+    const toD = charDisplay(toCh);
+    const speed = flipSpeedMs;
+
+    // Remove any existing flip elements
+    this.el.querySelectorAll('.flap-flip').forEach(e => e.remove());
+
+    // Create flip-down (old char top half falling)
+    const fd = document.createElement('div');
+    fd.className = 'flap-flip flap-flip-down';
+    fd.style.setProperty('--flip-speed', speed + 'ms');
+    const fdChar = document.createElement('span');
+    fdChar.className = 'flap-char';
+    fdChar.textContent = fromD === ' ' ? '' : fromD;
+    fd.appendChild(fdChar);
+
+    // Create flip-up (new char bottom half rising)
+    const fu = document.createElement('div');
+    fu.className = 'flap-flip flap-flip-up';
+    fu.style.setProperty('--flip-speed', speed + 'ms');
+    const fuChar = document.createElement('span');
+    fuChar.className = 'flap-char';
+    fuChar.textContent = toD === ' ' ? '' : toD;
+    fu.appendChild(fuChar);
+
+    // Update bottom static to new char immediately (revealed as flip-up lands)
+    const botChar = this.el.querySelector('.flap-bottom .flap-char');
+    if (botChar) botChar.textContent = toD === ' ' ? '' : toD;
+
+    this.el.appendChild(fd);
+    this.el.appendChild(fu);
+
+    // Cleanup after animation
+    setTimeout(() => {
+      fd.remove();
+      fu.remove();
+      // Update top static to new char
+      const topChar = this.el.querySelector('.flap-top .flap-char');
+      if (topChar) topChar.textContent = toD === ' ' ? '' : toD;
+      onDone();
+    }, speed * 2 + 10);
+  }
+}
 
 // ── Grid ──
 
@@ -175,14 +314,16 @@ function buildGrid(rows, cols) {
   const grid = document.getElementById('simGrid');
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   grid.innerHTML = '';
+  flaps = [];
   for (let i = 0; i < rows * cols; i++) {
-    const flap = document.createElement('div');
-    flap.className = 'sim-flap';
-    flap.dataset.index = i;
-    const split = document.createElement('div');
-    split.className = 'flap-split';
-    flap.appendChild(split);
-    grid.appendChild(flap);
+    const el = document.createElement('div');
+    el.className = 'sim-flap';
+    el.innerHTML = `
+      <div class="flap-half flap-top"><span class="flap-char"></span></div>
+      <div class="flap-half flap-bottom"><span class="flap-char"></span></div>
+      <div class="flap-divider"></div>`;
+    grid.appendChild(el);
+    flaps.push(new FlapUnit(el, i));
   }
   buildComposeInputs(rows, cols);
   document.getElementById('cfgRows').value = rows;
@@ -190,24 +331,16 @@ function buildGrid(rows, cols) {
 }
 
 function updateDisplay(state) {
-  if (state === lastState) return;
-  lastState = state;
-  const flaps = document.querySelectorAll('.sim-flap');
   for (let i = 0; i < flaps.length; i++) {
     const ch = state[i] || ' ';
-    const disp = STATE_DISPLAY[ch] || ch;
-    // Keep the split line, update text
-    const textNode = flaps[i].childNodes[1];
-    if (textNode && textNode.nodeType === 3) {
-      textNode.textContent = disp === ' ' ? '' : disp;
-    } else {
-      // First time or missing text node
-      if (flaps[i].childNodes.length > 1) {
-        flaps[i].removeChild(flaps[i].lastChild);
-      }
-      flaps[i].appendChild(document.createTextNode(disp === ' ' ? '' : disp));
-    }
+    const idx = CHAR_MAP.indexOf(ch);
+    flaps[i].setTarget(idx >= 0 ? idx : 0, i * 8);
   }
+}
+
+function updateFlipSpeed() {
+  flipSpeedMs = parseInt(document.getElementById('flipSpeed').value);
+  document.getElementById('flipVal').textContent = flipSpeedMs + 'ms';
 }
 
 async function applyGridConfig() {
