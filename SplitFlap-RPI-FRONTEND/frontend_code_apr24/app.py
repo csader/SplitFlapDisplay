@@ -63,6 +63,19 @@ def load_settings():
         "saved_playlists": {},
         "livestream_interval": "25",
         "livestream_comments": "",
+        "sports_nfl":   "",
+        "sports_nba":   "",
+        "sports_mlb":   "",
+        "sports_nhl":   "",
+        "sports_ncaaf": "",
+        "sports_ncaab": "",
+        "sports_mls":   "",
+        "sports_epl":   "",
+        "sports_laliga":"",
+        "sports_ucl":   "",
+        "sports_wnba":  "",
+        "sports_pga":   "",
+        "sports_ufc":   "",
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -81,6 +94,27 @@ def save_settings(data):
         json.dump(data, f, indent=4)
 
 settings = load_settings()
+
+
+# ============================================================
+#  SPORTS LEAGUE REGISTRY
+# ============================================================
+
+SPORTS_LEAGUES = {
+    'nfl':    {'path': 'football/nfl',                       'name': 'NFL'},
+    'nba':    {'path': 'basketball/nba',                     'name': 'NBA'},
+    'mlb':    {'path': 'baseball/mlb',                       'name': 'MLB'},
+    'nhl':    {'path': 'hockey/nhl',                         'name': 'NHL'},
+    'ncaaf':  {'path': 'football/college-football',          'name': 'NCAAF'},
+    'ncaab':  {'path': 'basketball/mens-college-basketball', 'name': 'NCAAB'},
+    'mls':    {'path': 'soccer/usa.1',                       'name': 'MLS'},
+    'epl':    {'path': 'soccer/eng.1',                       'name': 'EPL'},
+    'laliga': {'path': 'soccer/esp.1',                       'name': 'LALIGA'},
+    'ucl':    {'path': 'soccer/uefa.champions',              'name': 'UCL'},
+    'wnba':   {'path': 'basketball/wnba',                    'name': 'WNBA'},
+    'pga':    {'path': 'golf/pga',                           'name': 'PGA'},
+    'ufc':    {'path': 'mma/ufc',                            'name': 'UFC'},
+}
 
 
 # ============================================================
@@ -590,26 +624,125 @@ def fetch_stocks():
     return pages or [format_lines("NO STOCKS", "CONFIGURED", "")]
 
 def fetch_sports():
-    teams = [t.strip() for t in settings.get('nhl_teams', 'BOS,DAL').split(',') if t.strip()]
     pages = []
-    try:
-        games = requests.get("https://api-web.nhle.com/v1/score/now", timeout=5).json().get('games', [])
-        for g in games:
-            away = g['awayTeam']['abbrev']
-            home = g['homeTeam']['abbrev']
-            if away in teams or home in teams:
-                score = f"{away} {g['awayTeam'].get('score',0)} {home} {g['homeTeam'].get('score',0)}"
-                state = g['gameState']
-                if state in ('F', 'FINAL'):
-                    clock = "FINAL"
-                elif state in ('LIVE', 'CRIT'):
-                    clock = f"P{g['period']} {g['clock']['timeRemaining']}"
-                else:
-                    clock = "SCHEDULED"
-                pages.append(format_lines("NHL SCORE", score, clock))
-        return pages or [format_lines("NHL SCORES", "NO GAMES", "TODAY")]
-    except:
-        return [format_lines("SPORTS ERR", "", "")]
+
+    # Migration: old nhl_teams → new sports_nhl
+    if settings.get('nhl_teams') and not settings.get('sports_nhl'):
+        settings['sports_nhl'] = settings['nhl_teams']
+
+    for league_key, league_info in SPORTS_LEAGUES.items():
+        teams_str = settings.get(f'sports_{league_key}', '').strip()
+        if not teams_str:
+            continue
+        team_filter = [t.strip().upper() for t in teams_str.split(',') if t.strip()]
+        show_all = '*' in team_filter
+        try:
+            pages.extend(_fetch_league_scores(league_key, league_info, team_filter, show_all))
+        except Exception as e:
+            logging.error(f"ESPN {league_key} error: {e}")
+
+    return pages or [format_lines("SPORTS", "NO GAMES", "CONFIGURED")]
+
+
+def _fetch_league_scores(league_key, league_info, team_filter, show_all):
+    url = f"https://site.api.espn.com/apis/site/v2/sports/{league_info['path']}/scoreboard"
+    data = requests.get(url, timeout=8).json()
+    events = data.get('events', [])
+
+    if league_key == 'pga':
+        return _format_golf(events, league_info)
+    if league_key == 'ufc':
+        return _format_mma(events, league_info)
+
+    live, upcoming, final = [], [], []
+    for event in events:
+        comp = event.get('competitions', [{}])[0]
+        competitors = comp.get('competitors', [])
+        if len(competitors) < 2:
+            continue
+
+        away = home = None
+        for c in competitors:
+            if c.get('homeAway') == 'home':
+                home = c
+            else:
+                away = c
+        if not away or not home:
+            continue
+
+        away_abbr = away['team'].get('abbreviation', '???').upper()
+        home_abbr = home['team'].get('abbreviation', '???').upper()
+
+        if not show_all and away_abbr not in team_filter and home_abbr not in team_filter:
+            continue
+
+        state = event.get('status', {}).get('type', {}).get('state', 'pre')
+        detail = event.get('status', {}).get('type', {}).get('shortDetail', '')
+
+        page = _format_game_page(
+            league_info, away_abbr, away.get('score', '0'),
+            home_abbr, home.get('score', '0'), state, detail)
+
+        if state == 'in':
+            live.append(page)
+        elif state == 'pre':
+            upcoming.append(page)
+        else:
+            final.append(page)
+
+    return live + upcoming + final
+
+
+def _format_game_page(league_info, away_abbr, away_score, home_abbr, home_score, state, detail):
+    row1 = league_info['name']
+    if state == 'pre':
+        row2 = f"{away_abbr} VS {home_abbr}"
+    else:
+        row2 = f"{away_abbr} {away_score}  {home_abbr} {home_score}"
+    row3 = "FINAL" if state == 'post' else detail.upper()[:15]
+    return format_lines(row1, row2, row3)
+
+
+def _format_golf(events, league_info):
+    if not events:
+        return [format_lines("PGA TOUR", "NO EVENT", "THIS WEEK")]
+    event = events[0]
+    comps = event.get('competitions', [{}])
+    if not comps:
+        return [format_lines("PGA TOUR", "NO DATA", "")]
+    competitors = comps[0].get('competitors', [])
+    competitors.sort(key=lambda c: int(c.get('order', 999)))
+    pages = []
+    for i in range(0, min(9, len(competitors)), 3):
+        chunk = competitors[i:i+3]
+        lines = []
+        for c in chunk:
+            name = c.get('athlete', {}).get('shortName', '?')
+            score = c.get('score', {}).get('displayValue', '') if isinstance(c.get('score'), dict) else str(c.get('score', ''))
+            pos = c.get('order', '?')
+            lines.append(f"{pos} {name[:8]} {score}"[:15])
+        while len(lines) < 3:
+            lines.append('')
+        pages.append(format_lines(lines[0], lines[1], lines[2]))
+    return pages or [format_lines("PGA TOUR", "NO LEADERS", "")]
+
+
+def _format_mma(events, league_info):
+    if not events:
+        return [format_lines("UFC", "NO EVENT", "SCHEDULED")]
+    pages = []
+    for event in events[:1]:
+        for comp in event.get('competitions', [])[:5]:
+            competitors = comp.get('competitors', [])
+            if len(competitors) < 2:
+                continue
+            name1 = competitors[0].get('athlete', {}).get('shortName', '?').upper()[:7]
+            name2 = competitors[1].get('athlete', {}).get('shortName', '?').upper()[:7]
+            state = comp.get('status', {}).get('type', {}).get('state', 'pre')
+            detail = comp.get('status', {}).get('type', {}).get('shortDetail', '')
+            row3 = detail.upper()[:15] if detail else ("LIVE" if state == 'in' else "UPCOMING")
+            pages.append(format_lines("UFC", f"{name1} V {name2}", row3))
+    return pages or [format_lines("UFC", "NO FIGHTS", "SCHEDULED")]
 
 def fetch_youtube_data():
     cid = settings.get("yt_channel_id", "").strip()
@@ -1104,6 +1237,10 @@ def handle_settings():
                 'countdown_event', 'countdown_target', 'world_clock_zones',
                 'crypto_list', 'anim_style', 'anim_speed', 'anim_text',
                 'livestream_interval', 'livestream_comments',
+                'sports_nfl', 'sports_nba', 'sports_mlb', 'sports_nhl',
+                'sports_ncaaf', 'sports_ncaab', 'sports_mls', 'sports_epl',
+                'sports_laliga', 'sports_ucl', 'sports_wnba', 'sports_pga',
+                'sports_ufc',
             ]
             settings.update({k: data[k] for k in keys if k in data})
             save_settings(settings)
