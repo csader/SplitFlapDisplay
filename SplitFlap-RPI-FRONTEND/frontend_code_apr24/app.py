@@ -28,7 +28,7 @@ except Exception as e:
 
 # --- GLOBAL STATE ---
 FLAP_CHARS = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$&()-+=;q:%'.,/?*roygbpw"
-current_indices = [-1] * 45
+current_indices = [-1] * 45  # resized after settings load
 current_display_string = " " * 45
 is_homed = False
 
@@ -63,6 +63,8 @@ def load_settings():
         "saved_playlists": {},
         "livestream_interval": "25",
         "livestream_comments": "",
+        "sim_rows": 3,
+        "sim_cols": 15,
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -81,6 +83,23 @@ def save_settings(data):
         json.dump(data, f, indent=4)
 
 settings = load_settings()
+
+
+# ============================================================
+#  GRID HELPERS
+# ============================================================
+
+def get_rows(): return int(settings.get('sim_rows', 3))
+def get_cols(): return int(settings.get('sim_cols', 15))
+def get_module_count(): return get_rows() * get_cols()
+
+def resize_grid():
+    global current_indices, current_display_string
+    n = get_module_count()
+    current_indices = [-1] * n
+    current_display_string = " " * n
+
+resize_grid()
 
 
 # ============================================================
@@ -136,32 +155,36 @@ def sync_hardware_data(mod_id):
 #  ANIMATION ORDER GENERATORS
 # ============================================================
 
-def get_animation_order(style='ltr'):
-    """Return a list of the 45 module indices in the requested send order."""
-    def m(r, c): return r * 15 + c
+def get_animation_order(style='ltr', rows=None, cols=None):
+    """Return a list of the module indices in the requested send order."""
+    rows = rows or get_rows()
+    cols = cols or get_cols()
+    total = rows * cols
+    def m(r, c): return r * cols + c
 
     if style == 'rtl':
-        return list(range(44, -1, -1))
+        return list(range(total - 1, -1, -1))
 
     elif style == 'center_out':
         order, seen = [], set()
-        for d in range(8):
-            for r in range(3):
-                cols = [7] if d == 0 else [7 - d, 7 + d]
-                for c in cols:
-                    if 0 <= c < 15:
+        center = cols // 2
+        for d in range(center + 1):
+            for r in range(rows):
+                cs = [center] if d == 0 else [center - d, center + d]
+                for c in cs:
+                    if 0 <= c < cols:
                         idx = m(r, c)
                         if idx not in seen:
                             seen.add(idx); order.append(idx)
         return order
 
     elif style == 'outside_in':
-        return list(reversed(get_animation_order('center_out')))
+        return list(reversed(get_animation_order('center_out', rows, cols)))
 
     elif style == 'spiral':
-        vis = [[False] * 15 for _ in range(3)]
+        vis = [[False] * cols for _ in range(rows)]
         order = []
-        top, bottom, left, right = 0, 2, 0, 14
+        top, bottom, left, right = 0, rows - 1, 0, cols - 1
         while top <= bottom and left <= right:
             for c in range(left, right + 1):
                 if not vis[top][c]:
@@ -182,10 +205,10 @@ def get_animation_order(style='ltr'):
 
     elif style == 'diagonal':
         order, seen = [], set()
-        for d in range(17):
-            for r in range(3):
+        for d in range(rows + cols - 1):
+            for r in range(rows):
                 c = d - r
-                if 0 <= c < 15:
+                if 0 <= c < cols:
                     idx = m(r, c)
                     if idx not in seen:
                         seen.add(idx); order.append(idx)
@@ -193,40 +216,39 @@ def get_animation_order(style='ltr'):
 
     elif style == 'anti_diagonal':
         order, seen = [], set()
-        for d in range(17):
-            for r in range(3):
-                c = (14 - d) + r
-                if 0 <= c < 15:
+        for d in range(rows + cols - 1):
+            for r in range(rows):
+                c = (cols - 1 - d) + r
+                if 0 <= c < cols:
                     idx = m(r, c)
                     if idx not in seen:
                         seen.add(idx); order.append(idx)
         return order
 
     elif style == 'random':
-        return random.sample(range(45), 45)
+        return random.sample(range(total), total)
 
     elif style == 'rain':
-        return [m(r, c) for r in range(3) for c in range(15)]
+        return [m(r, c) for r in range(rows) for c in range(cols)]
 
     elif style == 'reverse_rain':
-        return [m(r, c) for r in range(2, -1, -1) for c in range(15)]
+        return [m(r, c) for r in range(rows - 1, -1, -1) for c in range(cols)]
 
     elif style == 'columns':
-        return [m(r, c) for c in range(15) for r in range(3)]
+        return [m(r, c) for c in range(cols) for r in range(rows)]
 
     elif style == 'columns_rtl':
-        return [m(r, c) for c in range(14, -1, -1) for r in range(3)]
+        return [m(r, c) for c in range(cols - 1, -1, -1) for r in range(rows)]
 
     elif style == 'alternating':
-        # Row 0 (top) LTR, Row 1 (middle) RTL, Row 2 (bottom) LTR — interleaved column-by-column
         order = []
-        for c in range(15):
-            order.append(m(0, c))           # top row: left to right
-            order.append(m(1, 14 - c))      # middle row: right to left
-            order.append(m(2, c))           # bottom row: left to right
+        for c in range(cols):
+            for r in range(rows):
+                ac = c if r % 2 == 0 else (cols - 1 - c)
+                order.append(m(r, ac))
         return order
 
-    return list(range(45))  # default ltr
+    return list(range(total))  # default ltr
 
 
 # ============================================================
@@ -254,11 +276,12 @@ def send_to_display(text, order=None, raw=False, step_delay_ms=15):
         clean_text = clean_text.replace(emoji, char)
     # The physical " flap is addressed as 'q' in the firmware character map
     clean_text = clean_text.replace('"', 'q')
-    clean_text = clean_text.ljust(45)[:45]
+    n = get_module_count()
+    clean_text = clean_text.ljust(n)[:n]
     logging.info(f"DISPLAY: {clean_text}")
 
     if order is None:
-        order = list(range(45))
+        order = list(range(n))
 
     max_dist = 0
     with serial_lock:
@@ -291,33 +314,34 @@ def send_to_display(text, order=None, raw=False, step_delay_ms=15):
 def generate_rainbow_pages():
     """7 pages cycling the colour tiles across the board."""
     colors = 'roygbpw'
-    return [''.join(colors[(c + off) % 7] for r in range(3) for c in range(15))
+    return [''.join(colors[(c + off) % 7] for r in range(get_rows()) for c in range(get_cols()))
             for off in range(7)]
 
 def generate_sweep_pages():
     """Colour band sweeping left→right then right→left."""
     colors = 'roygbpw'
+    cols = get_cols()
     pages = []
-    for i in range(1, 16):
+    for i in range(1, cols + 1):
         col = colors[i % 7]
-        pages.append(''.join(col if c < i else ' ' for r in range(3) for c in range(15)))
-    for i in range(14, 0, -1):
+        pages.append(''.join(col if c < i else ' ' for r in range(get_rows()) for c in range(cols)))
+    for i in range(cols - 1, 0, -1):
         col = colors[(i + 3) % 7]
-        pages.append(''.join(col if c < i else ' ' for r in range(3) for c in range(15)))
+        pages.append(''.join(col if c < i else ' ' for r in range(get_rows()) for c in range(cols)))
     return pages
 
 def generate_twinkle_pages(n=12):
     """Sparse random colour dots."""
     colors = 'roygbpw   '  # extra spaces for sparsity
-    return [''.join(random.choice(colors) for _ in range(45)) for _ in range(n)]
+    return [''.join(random.choice(colors) for _ in range(get_module_count())) for _ in range(n)]
 
 def generate_checker_pages():
     """Alternating two-colour checkerboard that swaps through several palettes."""
     pages = []
     pairs = [('r', 'b'), ('o', 'p'), ('y', 'g'), ('r', 'w'), ('g', 'b')]
     for a, b in pairs:
-        p1 = ''.join(a if (r + c) % 2 == 0 else b for r in range(3) for c in range(15))
-        p2 = ''.join(b if (r + c) % 2 == 0 else a for r in range(3) for c in range(15))
+        p1 = ''.join(a if (r + c) % 2 == 0 else b for r in range(get_rows()) for c in range(get_cols()))
+        p2 = ''.join(b if (r + c) % 2 == 0 else a for r in range(get_rows()) for c in range(get_cols()))
         pages += [p1, p2]
     return pages
 
@@ -327,15 +351,15 @@ def run_matrix_animation():
     send order), then the target text revealed in the configured style.
     """
     global last_sent_page, loop_delay
-    target = settings.get('anim_text', 'SPLIT  FLAP  DISPLAY').upper().ljust(45)[:45]
+    target = settings.get('anim_text', 'SPLIT  FLAP  DISPLAY').upper().ljust(get_module_count())[:get_module_count()]
     speed  = max(0.1, float(settings.get('anim_speed', '0.4')))
     style  = settings.get('anim_style', 'ltr')
     chars  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$&?%*-+'
 
     frame_plan = [
-        ('random',  lambda: ''.join(random.choice(chars) for _ in range(45))),
-        ('rain',    lambda: ''.join(random.choice(chars) for _ in range(45))),
-        ('spiral',  lambda: ''.join(random.choice(chars) for _ in range(45))),
+        ('random',  lambda: ''.join(random.choice(chars) for _ in range(get_module_count()))),
+        ('rain',    lambda: ''.join(random.choice(chars) for _ in range(get_module_count()))),
+        ('spiral',  lambda: ''.join(random.choice(chars) for _ in range(get_module_count()))),
         (style,     lambda: target),
     ]
 
@@ -387,7 +411,7 @@ def run_demo():
     def show(text, dur=4, style='ltr', raw_flag=False):
         """Send one page, wait for rotation + display time."""
         order = get_animation_order(style)
-        padded = text.ljust(45)[:45]
+        padded = text.ljust(get_module_count())[:get_module_count()]
         md = send_to_display(padded, order, raw=raw_flag)
         last_sent_page = padded
         rot = md * (4.0 / 64.0)
@@ -414,7 +438,7 @@ def run_demo():
         for sty in ('random', 'rain', 'spiral'):
             if stop_event.is_set():
                 return False
-            noise = ''.join(random.choice(chars) for _ in range(45))
+            noise = ''.join(random.choice(chars) for _ in range(get_module_count()))
             order = get_animation_order(sty)
             md = send_to_display(noise, order, raw=True)
             last_sent_page = noise
@@ -516,8 +540,11 @@ def run_demo():
 #  APP DATA FETCHERS
 # ============================================================
 
-def format_lines(l1, l2, l3):
-    return l1.center(15)[:15] + l2.center(15)[:15] + l3.center(15)[:15]
+def format_lines(*lines, cols=None):
+    cols = cols or get_cols()
+    rows = get_rows()
+    padded = list(lines) + [''] * (rows - len(lines))
+    return ''.join(l.center(cols)[:cols] for l in padded[:rows])
 
 def fetch_weather_data():
     api_key  = settings.get("weather_api_key", "").strip()
@@ -560,21 +587,23 @@ def fetch_metro():
                 dirs[d].append(str(mins))
 
         def fmt(name, times):
-            if not times: return f"{name} ---".ljust(15)
-            return f"{name} {','.join(times)}M"[:15].ljust(15)
+            if not times: return f"{name} ---".ljust(get_cols())
+            return f"{name} {','.join(times)}M"[:get_cols()].ljust(get_cols())
 
         # Use orange colour tiles for the header
-        header = ('\U0001f7e7\U0001f7e7' + route.upper()[:9] + '\U0001f7e7\U0001f7e7').center(15)
+        header = ('\U0001f7e7\U0001f7e7' + route.upper()[:9] + '\U0001f7e7\U0001f7e7').center(get_cols())
         return [header + fmt("OAK GRV", dirs[1]) + fmt("FRST HLS", dirs[0])]
     except:
         return [format_lines("METRO ERROR", "", "")]
 
 def fetch_stocks():
     tickers = [t.strip() for t in settings.get('stocks_list', 'MSFT,GOOG,NVDA').split(',') if t.strip()]
+    cols = get_cols()
+    rows = get_rows()
     pages = []
-    for chunk in [tickers[i:i+3] for i in range(0, len(tickers), 3)]:
-        pl = ["               "] * 3
-        cl = ["               "] * 3
+    for chunk in [tickers[i:i+rows] for i in range(0, len(tickers), rows)]:
+        pl = [" " * cols] * rows
+        cl = [" " * cols] * rows
         for idx, sym in enumerate(chunk):
             try:
                 si   = yf.Ticker(sym).fast_info
@@ -582,12 +611,12 @@ def fetch_stocks():
                 prev = si.previous_close
                 pct  = ((prc - prev) / prev) * 100
                 sign = "+" if pct >= 0 else ""
-                pl[idx] = f"{sym[:5]:<5} ${prc:<7.2f}"[:15].ljust(15)
-                cl[idx] = f"{sym[:5]:<5} {sign}{pct:.2f}%"[:15].ljust(15)
+                pl[idx] = f"{sym[:5]:<5} ${prc:<7.2f}"[:cols].ljust(cols)
+                cl[idx] = f"{sym[:5]:<5} {sign}{pct:.2f}%"[:cols].ljust(cols)
             except:
-                pl[idx] = cl[idx] = f"{sym[:5]:<5} ERR".ljust(15)
-        pages += [pl[0]+pl[1]+pl[2], cl[0]+cl[1]+cl[2]]
-    return pages or [format_lines("NO STOCKS", "CONFIGURED", "")]
+                pl[idx] = cl[idx] = f"{sym[:5]:<5} ERR".ljust(cols)
+        pages += [''.join(pl), ''.join(cl)]
+    return pages or [format_lines("NO STOCKS", "CONFIGURED")]
 
 def fetch_sports():
     teams = [t.strip() for t in settings.get('nhl_teams', 'BOS,DAL').split(',') if t.strip()]
@@ -645,7 +674,8 @@ def fetch_youtube_comments():
             sn     = item['snippet']['topLevelComment']['snippet']
             author = ''.join(c for c in sn['authorDisplayName'].upper() if c in FLAP_CHARS)
             text   = sn['textDisplay'].upper().replace('\n', ' ')
-            pages.append(author[:15].center(15) + text[0:15].ljust(15) + text[15:30].ljust(15))
+            c = get_cols()
+            pages.append(author[:c].center(c) + text[0:c].ljust(c) + text[c:c*2].ljust(c))
         return pages or [format_lines("YT COMMENTS", "FETCH ERROR", "")]
     except:
         return [format_lines("YT COMMENTS", "API ERROR", "")]
@@ -673,22 +703,24 @@ def fetch_youtube_viewers():
 
 
 def parse_livestream_comments():
-    """Parse user-entered comment blocks into 45-char display pages.
+    """Parse user-entered comment blocks into display pages.
     Blocks are separated by blank lines; within a block each newline
-    is one row (up to 3 rows of 15 chars, auto-centered)."""
+    is one row, auto-centered to current grid dimensions."""
     raw = settings.get('livestream_comments', '').strip()
     if not raw:
         return []
     raw = raw.replace('\r\n', '\n').replace('\r', '\n')
     blocks = [b for b in raw.split('\n\n') if b.strip()]
+    cols = get_cols()
+    rows = get_rows()
     pages = []
     for block in blocks:
         lines = [l.strip() for l in block.split('\n')]
-        lines = [l for l in lines if l]  # drop empty lines inside block
-        while len(lines) < 3:
+        lines = [l for l in lines if l]
+        while len(lines) < rows:
             lines.append('')
-        lines = lines[:3]
-        page = ''.join(l[:15].center(15)[:15] for l in lines)
+        lines = lines[:rows]
+        page = ''.join(l[:cols].center(cols)[:cols] for l in lines)
         pages.append(page)
     return pages
 
@@ -708,7 +740,7 @@ def build_livestream_pages():
         pages.append({
             'text':  format_lines(
                 time_str,
-                yt['name'][:15],
+                yt['name'][:get_cols()],
                 f"{yt['subs']} SUBS",
             ),
             'style': 'ltr',
@@ -767,8 +799,10 @@ def fetch_countdown():
 
 def fetch_world_clock():
     zones_str = settings.get('world_clock_zones', 'US/Eastern,US/Pacific,Europe/London')
-    zones = [z.strip() for z in zones_str.split(',') if z.strip()][:3]
-    while len(zones) < 3:
+    rows = get_rows()
+    cols = get_cols()
+    zones = [z.strip() for z in zones_str.split(',') if z.strip()][:rows]
+    while len(zones) < rows:
         zones.append('UTC')
     LABELS = {
         'US/Eastern': 'EST', 'US/Pacific': 'PST', 'US/Central': 'CST',
@@ -784,25 +818,27 @@ def fetch_world_clock():
             now   = datetime.now(pytz.timezone(zone))
             tstr  = now.strftime("%I:%M%p").lstrip("0")
             label = LABELS.get(zone, zone.split('/')[-1][:4].upper())
-            lines.append(f"{label:<4} {tstr}"[:15].ljust(15))
+            lines.append(f"{label:<4} {tstr}"[:cols].ljust(cols))
         except:
-            lines.append("ERR             "[:15])
-    return [lines[0] + lines[1] + lines[2]]
+            lines.append("ERR".ljust(cols))
+    return [''.join(lines)]
 
 def fetch_crypto():
     coins = [c.strip().lower() for c in
              settings.get('crypto_list', 'bitcoin,ethereum,solana').split(',') if c.strip()][:6]
     url = (f"https://api.coingecko.com/api/v3/simple/price"
            f"?ids={','.join(coins)}&vs_currencies=usd&include_24hr_change=true")
+    cols = get_cols()
+    rows = get_rows()
     try:
         data  = requests.get(url, timeout=8).json()
         pages = []
-        for chunk in [coins[i:i+3] for i in range(0, len(coins), 3)]:
-            pl = ["               "] * 3
-            cl = ["               "] * 3
+        for chunk in [coins[i:i+rows] for i in range(0, len(coins), rows)]:
+            pl = [" " * cols] * rows
+            cl = [" " * cols] * rows
             for idx, coin in enumerate(chunk):
                 if coin not in data:
-                    pl[idx] = cl[idx] = f"{coin[:4].upper():4} N/A".ljust(15)
+                    pl[idx] = cl[idx] = f"{coin[:4].upper():4} N/A".ljust(cols)
                     continue
                 usd   = data[coin].get('usd', 0)
                 chg   = data[coin].get('usd_24h_change', 0) or 0
@@ -814,13 +850,13 @@ def fetch_crypto():
                     pstr = f"{short} ${usd:,.2f}"
                 else:
                     pstr = f"{short} ${usd:.4f}"
-                pl[idx] = pstr[:15].ljust(15)
-                cl[idx] = f"{short} {sign}{chg:.1f}%"[:15].ljust(15)
-            pages += [pl[0]+pl[1]+pl[2], cl[0]+cl[1]+cl[2]]
-        return pages or [format_lines("CRYPTO", "NO DATA", "")]
+                pl[idx] = pstr[:cols].ljust(cols)
+                cl[idx] = f"{short} {sign}{chg:.1f}%"[:cols].ljust(cols)
+            pages += [''.join(pl), ''.join(cl)]
+        return pages or [format_lines("CRYPTO", "NO DATA")]
     except Exception as e:
         logging.error(f"Crypto fetch error: {e}")
-        return [format_lines("CRYPTO ERR", "CHECK CONN", "")]
+        return [format_lines("CRYPTO ERR", "CHECK CONN")]
 
 def fetch_iss():
     try:
@@ -834,8 +870,8 @@ def fetch_iss():
             hdr  = f"ISS CREW:{crew}"
         except:
             hdr = "ISS TRACKER"
-        l2 = f"LAT {abs(lat):6.2f}{ld}".center(15)
-        l3 = f"LON {abs(lon):7.2f}{lnd}".center(15)
+        l2 = f"LAT {abs(lat):6.2f}{ld}".center(get_cols())
+        l3 = f"LON {abs(lon):7.2f}{lnd}".center(get_cols())
         return [hdr.center(15) + l2 + l3]
     except Exception as e:
         logging.error(f"ISS fetch error: {e}")
@@ -885,15 +921,15 @@ def playlist_loop():
 
         elif active_app == 'time':
             tz = pytz.timezone(settings.get('timezone', 'US/Eastern'))
-            display_pages = [format_lines("", datetime.now(tz).strftime("%I:%M %p").lstrip("0").center(15), "")]
+            display_pages = [format_lines("", datetime.now(tz).strftime("%I:%M %p").lstrip("0"), "")]
 
         elif active_app == 'date':
             tz = pytz.timezone(settings.get('timezone', 'US/Eastern'))
             dt = datetime.now(tz)
             display_pages = [format_lines(
-                dt.strftime("%I:%M %p").lstrip("0").center(15),
-                dt.strftime("%B %d").upper().center(15),
-                dt.strftime("%A").upper().center(15),
+                dt.strftime("%I:%M %p").lstrip("0"),
+                dt.strftime("%B %d").upper(),
+                dt.strftime("%A").upper(),
             )]
 
         elif active_app == 'countdown':
@@ -910,13 +946,14 @@ def playlist_loop():
             w = app_caches['weather']
             now_t = datetime.now(pytz.timezone(settings.get('timezone', 'US/Eastern'))).strftime("%I:%M%p").lstrip("0")
             if not w:
-                display_pages = [format_lines("NO WEATHER DATA", now_t.center(15), "CHECK API KEY")]
+                display_pages = [format_lines("NO WEATHER DATA", now_t, "CHECK API KEY")]
             else:
-                mcl = 14 - len(now_t)
-                l1  = f"{w['city'][:mcl]} {now_t}".center(15)
+                c = get_cols()
+                mcl = c - 1 - len(now_t)
+                l1  = f"{w['city'][:mcl]} {now_t}".center(c)
                 pfx = f"{w['temp']}F ({w['feels']}F) "
-                l2  = (pfx + w['desc'][:15-len(pfx)]).center(15)
-                l3  = f"H:{w['high']}F L:{w['low']}F".center(15)
+                l2  = (pfx + w['desc'][:c-len(pfx)]).center(c)
+                l3  = f"H:{w['high']}F L:{w['low']}F".center(c)
                 display_pages = [format_lines(l1, l2, l3)]
 
         elif active_app == 'dashboard':
@@ -931,13 +968,14 @@ def playlist_loop():
             w = app_caches['weather']
             now_t = dt.strftime("%I:%M%p").lstrip("0")
             if not w:
-                wp = format_lines("NO WEATHER DATA", now_t.center(15), "CHECK API KEY")
+                wp = format_lines("NO WEATHER DATA", now_t, "CHECK API KEY")
             else:
-                mcl = 14 - len(now_t)
-                l1  = f"{w['city'][:mcl]} {now_t}".center(15)
+                c = get_cols()
+                mcl = c - 1 - len(now_t)
+                l1  = f"{w['city'][:mcl]} {now_t}".center(c)
                 pfx = f"{w['temp']}F ({w['feels']}F) "
-                l2  = (pfx + w['desc'][:15-len(pfx)]).center(15)
-                l3  = f"H:{w['high']}F L:{w['low']}F".center(15)
+                l2  = (pfx + w['desc'][:c-len(pfx)]).center(c)
+                l3  = f"H:{w['high']}F L:{w['low']}F".center(c)
                 wp  = format_lines(l1, l2, l3)
             display_pages = [time_page, wp]
 
@@ -946,8 +984,8 @@ def playlist_loop():
                 app_caches['youtube'] = fetch_youtube_data()
                 last_fetches['youtube'] = now
             yt = app_caches['youtube']
-            display_pages = ([format_lines("YOUTUBE", yt['name'][:15].center(15),
-                                           f"{yt['subs']} SUBS".center(15))]
+            display_pages = ([format_lines("YOUTUBE", yt['name'][:get_cols()],
+                                           f"{yt['subs']} SUBS")]
                              if yt else [format_lines("YOUTUBE", "FETCH ERROR", "CHECK API")])
 
         elif active_app == 'yt_comments':
@@ -1084,9 +1122,18 @@ threading.Thread(target=playlist_loop, daemon=True).start()
 def index():
     return render_template('index.html')
 
+@app.route('/simulator')
+def simulator():
+    return render_template('simulator.html')
+
 @app.route('/current_state')
 def current_state():
-    return jsonify(is_homed=is_homed, state=current_display_string, active_app=active_app)
+    return jsonify(is_homed=is_homed, state=current_display_string, active_app=active_app,
+                   rows=get_rows(), cols=get_cols())
+
+@app.route('/grid_config')
+def grid_config():
+    return jsonify(rows=get_rows(), cols=get_cols(), total=get_module_count())
 
 @app.route('/settings', methods=['GET', 'POST'])
 def handle_settings():
@@ -1104,8 +1151,11 @@ def handle_settings():
                 'countdown_event', 'countdown_target', 'world_clock_zones',
                 'crypto_list', 'anim_style', 'anim_speed', 'anim_text',
                 'livestream_interval', 'livestream_comments',
+                'sim_rows', 'sim_cols',
             ]
             settings.update({k: data[k] for k in keys if k in data})
+            if 'sim_rows' in data or 'sim_cols' in data:
+                resize_grid()
             save_settings(settings)
             return jsonify(status="Saved")
 
@@ -1120,7 +1170,7 @@ def handle_settings():
         if action == 'home_one':
             send_raw(f"m{int(mod_id):02d}h")
             current_indices[int(mod_id)] = 0
-            sl = list(current_display_string.ljust(45))
+            sl = list(current_display_string.ljust(get_module_count()))
             sl[int(mod_id)] = ' '
             current_display_string = "".join(sl)
             return jsonify(status="Homing")
@@ -1166,7 +1216,7 @@ def custom_tune():
         send_raw(f"m{mod_id:02d}g{step}")
         if 0 <= idx < len(FLAP_CHARS):
             current_indices[mod_id] = idx
-            sl = list(current_display_string.ljust(45))
+            sl = list(current_display_string.ljust(get_module_count()))
             sl[mod_id] = FLAP_CHARS[idx]
             current_display_string = "".join(sl)
 
@@ -1197,7 +1247,7 @@ def sync_module():
 
 @app.route('/sync_all', methods=['POST'])
 def sync_all():
-    for i in range(45):
+    for i in range(get_module_count()):
         sync_hardware_data(i)
     return jsonify(status="success", settings=settings)
 
@@ -1261,8 +1311,8 @@ def home_all():
     global is_homed, current_indices, current_display_string
     send_raw("m**h")
     is_homed = True
-    current_indices = [0] * 45
-    current_display_string = " " * 45
+    current_indices = [0] * get_module_count()
+    current_display_string = " " * get_module_count()
     return jsonify(status="Homing All")
 
 
@@ -1289,7 +1339,7 @@ def auto_tune_route():
             ch = FLAP_CHARS[char_idx]
             # Build 45-char string of the same character and send raw
             # (raw=True so lowercase colour chars are not uppercased)
-            text = ch * 45
+            text = ch * get_module_count()
             send_to_display(text, raw=True)
             return jsonify(status="ok", char=ch, index=char_idx)
         return jsonify(status="error", message="Invalid index"), 400
@@ -1332,7 +1382,7 @@ def auto_tune_route():
     elif action == 'get_positions':
         char_idx = int(data.get('char_index', 0))
         positions = {}
-        for i in range(45):
+        for i in range(get_module_count()):
             mod_str  = str(i)
             cal      = int(settings['calibrations'].get(mod_str, 4096))
             expected = (char_idx * cal) // 64
@@ -1371,7 +1421,7 @@ def restore_settings():
     hw = False
     if ser:
         hw = True
-        for i in range(45):
+        for i in range(get_module_count()):
             s = str(i)
             send_raw(f"m{i:02d}o{int(settings['offsets'].get(s, 2832))}")
             send_raw(f"m{i:02d}t{int(settings['calibrations'].get(s, 4096))}")
