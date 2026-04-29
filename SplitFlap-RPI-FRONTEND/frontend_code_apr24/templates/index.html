@@ -551,8 +551,20 @@ const APP_SETTINGS_CONFIG = {
   stocks:     { title:'📈 Stocks Settings', fields:[
     {key:'stocks_list', label:'Tickers (comma-separated)', type:'text', ph:'MSFT,GOOG,NVDA'},
   ]},
-  sports:     { title:'🏒 Sports Settings', fields:[
-    {key:'nhl_teams', label:'NHL Teams (comma-separated)', type:'text', ph:'BOS,DAL'},
+  sports:     { title:'🏆 Sports Settings', fields:[
+    {key:'sports_nfl',    label:'NFL Teams (comma-sep, * for all)',  type:'text', ph:'NE,DAL'},
+    {key:'sports_nba',    label:'NBA Teams',                         type:'text', ph:'BOS,LAL'},
+    {key:'sports_mlb',    label:'MLB Teams',                         type:'text', ph:'BOS,NYY'},
+    {key:'sports_nhl',    label:'NHL Teams',                         type:'text', ph:'BOS,DAL'},
+    {key:'sports_ncaaf',  label:'College Football Teams',            type:'text', ph:'MICH,OSU'},
+    {key:'sports_ncaab',  label:'College Basketball Teams',          type:'text', ph:'DUKE,UNC'},
+    {key:'sports_mls',    label:'MLS Teams',                         type:'text', ph:'ATL,LAFC'},
+    {key:'sports_epl',    label:'Premier League Teams',              type:'text', ph:'ARS,LIV'},
+    {key:'sports_laliga', label:'La Liga Teams',                     type:'text', ph:'BAR,RMA'},
+    {key:'sports_ucl',    label:'Champions League Teams',            type:'text', ph:'BAR,BAY'},
+    {key:'sports_wnba',   label:'WNBA Teams',                       type:'text', ph:'NY,LA'},
+    {key:'sports_pga',    label:'PGA (* to enable)',                 type:'text', ph:'*'},
+    {key:'sports_ufc',    label:'UFC (* to enable)',                 type:'text', ph:'*'},
   ]},
   youtube:    { title:'▶️ YouTube Settings', fields:[
     {key:'yt_channel_id', label:'Channel ID', type:'text', ph:'UC...'},
