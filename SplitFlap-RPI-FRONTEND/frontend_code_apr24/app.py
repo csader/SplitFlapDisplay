@@ -11,6 +11,12 @@ import yfinance as yf
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    mqtt = None
+    logging.warning("paho-mqtt not installed — MQTT integration disabled")
+
 SERIAL_PORT = '/dev/ttyUSB0'
 BAUD_RATE = 9600
 CONFIG_PATH = "/home/gordo/splitflap/settings.json"
@@ -76,6 +82,11 @@ def load_settings():
         "sports_wnba":  "",
         "sports_pga":   "",
         "sports_ufc":   "",
+        "mqtt_enabled":  True,
+        "mqtt_broker":   "homeassistant.local",
+        "mqtt_port":     1883,
+        "mqtt_user":     "",
+        "mqtt_password": "",
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -115,6 +126,187 @@ SPORTS_LEAGUES = {
     'pga':    {'path': 'golf/pga',                           'name': 'PGA'},
     'ufc':    {'path': 'mma/ufc',                            'name': 'UFC'},
 }
+
+
+# ============================================================
+#  SPORTS LEAGUE REGISTRY
+# ============================================================
+
+SPORTS_LEAGUES = {
+    'nfl':    {'path': 'football/nfl',                       'name': 'NFL'},
+    'nba':    {'path': 'basketball/nba',                     'name': 'NBA'},
+    'mlb':    {'path': 'baseball/mlb',                       'name': 'MLB'},
+    'nhl':    {'path': 'hockey/nhl',                         'name': 'NHL'},
+    'ncaaf':  {'path': 'football/college-football',          'name': 'NCAAF'},
+    'ncaab':  {'path': 'basketball/mens-college-basketball', 'name': 'NCAAB'},
+    'mls':    {'path': 'soccer/usa.1',                       'name': 'MLS'},
+    'epl':    {'path': 'soccer/eng.1',                       'name': 'EPL'},
+    'laliga': {'path': 'soccer/esp.1',                       'name': 'LALIGA'},
+    'ucl':    {'path': 'soccer/uefa.champions',              'name': 'UCL'},
+    'wnba':   {'path': 'basketball/wnba',                    'name': 'WNBA'},
+    'pga':    {'path': 'golf/pga',                           'name': 'PGA'},
+    'ufc':    {'path': 'mma/ufc',                            'name': 'UFC'},
+}
+
+
+# ============================================================
+#  MQTT INTEGRATION
+# ============================================================
+
+MQTT_TOPIC_PREFIX = "splitflap"
+MQTT_AVAIL_TOPIC = f"{MQTT_TOPIC_PREFIX}/availability"
+MQTT_TEXT_CMD     = f"{MQTT_TOPIC_PREFIX}/text/set"
+MQTT_TEXT_STATE   = f"{MQTT_TOPIC_PREFIX}/text/state"
+MQTT_MODE_CMD     = f"{MQTT_TOPIC_PREFIX}/mode/set"
+MQTT_MODE_STATE   = f"{MQTT_TOPIC_PREFIX}/mode/state"
+MQTT_STATUS_STATE = f"{MQTT_TOPIC_PREFIX}/status/state"
+
+MQTT_MODE_OPTIONS = [
+    "off", "time", "date", "weather", "dashboard", "countdown", "world_clock",
+    "metro", "stocks", "sports", "youtube", "yt_comments", "crypto", "iss",
+    "livestream", "demo", "anim_rainbow", "anim_sweep", "anim_twinkle",
+    "anim_checker", "anim_matrix",
+]
+
+MQTT_DEVICE = {
+    "identifiers": ["splitflap_display"],
+    "name": "Split-Flap Display",
+    "manufacturer": "Adam G Makes",
+    "model": "SplitFlap 45-Module",
+}
+
+mqtt_client = None
+
+
+def mqtt_publish_state():
+    """Publish current display state and active mode to MQTT."""
+    if not mqtt_client or not mqtt_client.is_connected():
+        return
+    mqtt_client.publish(MQTT_TEXT_STATE, current_display_string, retain=True)
+    mqtt_client.publish(MQTT_STATUS_STATE, current_display_string, retain=True)
+    mqtt_client.publish(MQTT_MODE_STATE, active_app or "off", retain=True)
+
+
+def mqtt_publish_discovery():
+    """Publish Home Assistant MQTT discovery config for all entities."""
+    if not mqtt_client:
+        return
+    avail = {"topic": MQTT_AVAIL_TOPIC, "payload_available": "online", "payload_not_available": "offline"}
+
+    configs = [
+        ("text", "splitflap_text", {
+            "unique_id": "splitflap_text",
+            "name": "Display Text",
+            "command_topic": MQTT_TEXT_CMD,
+            "state_topic": MQTT_TEXT_STATE,
+            "min": 1,
+            "max": 45,
+            "mode": "text",
+            "availability": avail,
+            "device": MQTT_DEVICE,
+        }),
+        ("select", "splitflap_mode", {
+            "unique_id": "splitflap_mode",
+            "name": "Display Mode",
+            "command_topic": MQTT_MODE_CMD,
+            "state_topic": MQTT_MODE_STATE,
+            "options": MQTT_MODE_OPTIONS,
+            "availability": avail,
+            "device": MQTT_DEVICE,
+        }),
+        ("sensor", "splitflap_status", {
+            "unique_id": "splitflap_status",
+            "name": "Display Status",
+            "state_topic": MQTT_STATUS_STATE,
+            "availability": avail,
+            "device": MQTT_DEVICE,
+        }),
+    ]
+    for component, object_id, payload in configs:
+        topic = f"homeassistant/{component}/{object_id}/config"
+        mqtt_client.publish(topic, json.dumps(payload), retain=True)
+    logging.info("MQTT discovery payloads published")
+
+
+def _mqtt_on_connect(client, userdata, flags, rc, properties=None):
+    if rc == 0:
+        logging.info("MQTT connected to broker")
+        client.subscribe(MQTT_TEXT_CMD)
+        client.subscribe(MQTT_MODE_CMD)
+        client.subscribe("homeassistant/status")
+        client.publish(MQTT_AVAIL_TOPIC, "online", retain=True)
+        mqtt_publish_discovery()
+        mqtt_publish_state()
+    else:
+        logging.error(f"MQTT connection failed with code {rc}")
+
+
+def _mqtt_on_message(client, userdata, msg):
+    global active_app, current_playlist, last_sent_page, last_fetches, loop_delay
+    payload = msg.payload.decode('utf-8', errors='ignore').strip()
+
+    if msg.topic == "homeassistant/status" and payload == "online":
+        mqtt_publish_discovery()
+        mqtt_publish_state()
+        return
+
+    if msg.topic == MQTT_TEXT_CMD:
+        active_app = None
+        current_playlist = [payload]
+        last_sent_page = None
+        stop_event.set()
+        mqtt_publish_state()
+
+    elif msg.topic == MQTT_MODE_CMD:
+        if payload == "off":
+            active_app = None
+            stop_event.set()
+        elif payload in MQTT_MODE_OPTIONS:
+            active_app = payload
+            last_fetches = {k: 0 for k in last_fetches}
+            if active_app == 'stocks':
+                loop_delay = 10
+            elif active_app in ('countdown', 'world_clock'):
+                loop_delay = 1
+            elif active_app == 'livestream':
+                try:
+                    loop_delay = max(5, int(float(settings.get('livestream_interval', 25))))
+                except (TypeError, ValueError):
+                    loop_delay = 25
+            elif active_app.startswith('anim_'):
+                loop_delay = max(0.1, float(settings.get('anim_speed', '0.4')))
+            else:
+                loop_delay = 5
+            stop_event.set()
+        mqtt_publish_state()
+
+
+def mqtt_setup():
+    """Initialize MQTT client and connect to broker. Fails gracefully."""
+    global mqtt_client
+    if not mqtt or not settings.get('mqtt_enabled', True):
+        logging.info("MQTT disabled or paho-mqtt not installed")
+        return
+    try:
+        mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="splitflap_display")
+        user = settings.get('mqtt_user', '').strip()
+        pw = settings.get('mqtt_password', '').strip()
+        if user:
+            mqtt_client.username_pw_set(user, pw)
+        mqtt_client.will_set(MQTT_AVAIL_TOPIC, "offline", qos=1, retain=True)
+        mqtt_client.on_connect = _mqtt_on_connect
+        mqtt_client.on_message = _mqtt_on_message
+        broker = settings.get('mqtt_broker', 'homeassistant.local')
+        port = int(settings.get('mqtt_port', 1883))
+        mqtt_client.connect_async(broker, port)
+        mqtt_client.loop_start()
+        logging.info(f"MQTT connecting to {broker}:{port}")
+    except Exception as e:
+        mqtt_client = None
+        logging.error(f"MQTT setup failed: {e}")
+
+
+mqtt_setup()
 
 
 # ============================================================
@@ -315,6 +507,7 @@ def send_to_display(text, order=None, raw=False, step_delay_ms=15):
 
     current_display_string = clean_text
     is_homed = True
+    mqtt_publish_state()
     return max_dist
 
 
@@ -1242,6 +1435,7 @@ def handle_settings():
                 'sports_ncaaf', 'sports_ncaab', 'sports_mls', 'sports_epl',
                 'sports_laliga', 'sports_ucl', 'sports_wnba', 'sports_pga',
                 'sports_ufc',
+                'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_user', 'mqtt_password',
             ]
             settings.update({k: data[k] for k in keys if k in data})
             save_settings(settings)
@@ -1362,6 +1556,7 @@ def update_playlist():
     last_sent_page   = None
     active_app       = None
     stop_event.set()
+    mqtt_publish_state()
     return jsonify(status="success")
 
 @app.route('/run_app', methods=['POST'])
@@ -1385,6 +1580,7 @@ def run_app():
         loop_delay = 5
 
     stop_event.set()
+    mqtt_publish_state()
     return jsonify(status=f"App {active_app} started")
 
 @app.route('/stop_app', methods=['POST'])
@@ -1392,6 +1588,7 @@ def stop_app():
     global active_app
     active_app = None
     stop_event.set()
+    mqtt_publish_state()
     return jsonify(status="stopped")
 
 @app.route('/home_all')
