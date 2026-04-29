@@ -809,7 +809,7 @@ def fetch_stocks():
                 prev = si.previous_close
                 pct  = ((prc - prev) / prev) * 100
                 sign = "+" if pct >= 0 else ""
-                clr  = "g" if pct >= 0 else "r"
+                clr  = "\U0001f7e9" if pct >= 0 else "\U0001f7e5"
                 pl[idx] = f"{clr}{sym[:4]:<4} ${prc:<6.2f}"[:15].ljust(15)
                 cl[idx] = f"{clr}{sym[:4]:<4} {sign}{pct:.2f}%"[:15].ljust(15)
             except:
