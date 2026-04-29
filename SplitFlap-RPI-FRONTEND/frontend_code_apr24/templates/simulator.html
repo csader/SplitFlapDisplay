@@ -39,7 +39,7 @@ body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--t
 /* ── FLAP UNIT ── */
 .sim-flap{
   aspect-ratio:2/3;position:relative;perspective:300px;
-  font-family:'Courier New',monospace;font-size:clamp(.7rem,2vw,1.4rem);
+  font-family:'Courier New',monospace;font-size:clamp(1.8rem,6vw,4.5rem);
   user-select:none;
 }
 .flap-half{
@@ -50,9 +50,11 @@ body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--t
 .flap-bottom{bottom:0;border-radius:0 0 2px 2px;border-top:none}
 .flap-char{
   position:absolute;left:0;right:0;
-  height:200%;/* span full flap height from within a 50% container */
+  height:200%;
   display:flex;align-items:center;justify-content:center;
   color:#fff;
+  font-size:inherit;
+  line-height:1;
 }
 .flap-top .flap-char{top:0}
 .flap-bottom .flap-char{bottom:0}
@@ -118,7 +120,7 @@ body{font-family:'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--t
   .toolbar{gap:6px;padding:8px 10px}
   .toolbar h2{font-size:.9rem}
   .display-wrapper{padding:8px}
-  .sim-flap{font-size:.65rem}
+  .sim-flap{font-size:clamp(.9rem,3.5vw,2rem)}
 }
 </style>
 </head>
