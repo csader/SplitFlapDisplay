@@ -616,8 +616,9 @@ def fetch_stocks():
                 prev = si.previous_close
                 pct  = ((prc - prev) / prev) * 100
                 sign = "+" if pct >= 0 else ""
-                pl[idx] = f"{sym[:5]:<5} ${prc:<7.2f}"[:15].ljust(15)
-                cl[idx] = f"{sym[:5]:<5} {sign}{pct:.2f}%"[:15].ljust(15)
+                clr  = "g" if pct >= 0 else "r"
+                pl[idx] = f"{clr}{sym[:4]:<4} ${prc:<6.2f}"[:15].ljust(15)
+                cl[idx] = f"{clr}{sym[:4]:<4} {sign}{pct:.2f}%"[:15].ljust(15)
             except:
                 pl[idx] = cl[idx] = f"{sym[:5]:<5} ERR".ljust(15)
         pages += [pl[0]+pl[1]+pl[2], cl[0]+cl[1]+cl[2]]
