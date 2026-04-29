@@ -42,6 +42,12 @@ h3{margin-top:0;color:var(--text)}
 .preview-grid{display:grid;grid-template-columns:repeat(15,1fr);gap:3px}
 .flap-unit{aspect-ratio:2/3;background:var(--flap-bg);border:1px solid #333;display:flex;align-items:center;justify-content:center;font-size:1rem;font-family:'Courier New',monospace;color:#fff;border-radius:2px}
 
+/* ── SIMULATOR CONTROLS ── */
+.sim-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:.82rem}
+.sim-toolbar label{color:var(--text-muted);display:flex;align-items:center;gap:4px}
+.sim-toolbar select,.sim-toolbar input[type=number]{background:#111;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;font-size:.82rem;width:50px}
+.sim-toolbar select{width:auto}
+
 /* ── ANIMATED FLAP (live preview) ── */
 .live-flap{aspect-ratio:2/3;position:relative;perspective:300px;font-family:'Courier New',monospace;font-size:clamp(1.8rem,6vw,4.5rem);user-select:none}
 .live-flap .fh{position:absolute;left:0;right:0;height:50%;overflow:hidden;background:var(--flap-bg);border:1px solid #333}
@@ -237,6 +243,19 @@ input:checked+.slider:before{transform:translateX(20px)}
     </div>
 
     <div style="text-align:center;color:#888;font-size:.8rem;margin-bottom:4px;font-weight:bold;letter-spacing:1px">LIVE DISPLAY</div>
+    <div class="sim-toolbar">
+      <label>Rows <input type="number" id="simRows" value="3" min="1" max="20"></label>
+      <label>Cols <input type="number" id="simCols" value="15" min="1" max="50"></label>
+      <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="applyGridConfig()">Apply</button>
+      <label>Flip <input type="range" id="liveFlipSpeed" min="30" max="300" value="40" oninput="updateLiveFlipSpeed()"> <span id="liveFlipVal">40ms</span></label>
+      <label>Order <select id="liveVizOrder" onchange="vizLiveOrder()">
+        <option value="">None</option><option value="ltr">LTR</option><option value="rtl">RTL</option>
+        <option value="center_out">Center Out</option><option value="spiral">Spiral</option>
+        <option value="diagonal">Diagonal</option><option value="random">Random</option>
+        <option value="columns">Columns</option><option value="rain">Rain</option>
+      </select></label>
+      <button class="btn btn-sm btn-secondary" id="livePauseBtn" onclick="toggleLivePause()">Pause</button>
+    </div>
     <div class="preview-wrapper" style="position:relative;margin-bottom:18px">
       <div class="preview-grid live-grid-control"></div>
       <div class="homing-overlay" id="homing-control">HOMING REQUIRED</div>
@@ -827,23 +846,33 @@ class LiveFlap {
     const fv = fd === ' ' ? '' : fd;
     const tv = td === ' ' ? '' : td;
     this.el.querySelectorAll('.ff').forEach(e => e.remove());
-    const dn = document.createElement('div'); dn.className = 'ff ffd';
+    const spd = liveFlipSpeedMs;
+    const dn = document.createElement('div'); dn.className = 'ff ffd'; dn.style.animationDuration = spd+'ms';
     const dnc = document.createElement('span'); dnc.className = 'fc'; dnc.textContent = fv; dn.appendChild(dnc);
-    const up = document.createElement('div'); up.className = 'ff ffu';
+    const up = document.createElement('div'); up.className = 'ff ffu'; up.style.animationDuration = spd+'ms'; up.style.animationDelay = spd+'ms';
     const upc = document.createElement('span'); upc.className = 'fc'; upc.textContent = tv; up.appendChild(upc);
     this.el.querySelector('.fb .fc').textContent = tv;
     this.el.appendChild(dn); this.el.appendChild(up);
-    setTimeout(() => { dn.remove(); up.remove(); this.el.querySelector('.ft .fc').textContent = tv; done(); }, 90);
+    setTimeout(() => { dn.remove(); up.remove(); this.el.querySelector('.ft .fc').textContent = tv; done(); }, spd * 2 + 10);
   }
 }
 
-function initLiveGrids() {
+let liveFlipSpeedMs = 40;
+let liveGridRows = 3, liveGridCols = 15;
+let livePaused = false;
+
+function initLiveGrids(rows, cols) {
+  rows = rows || liveGridRows;
+  cols = cols || liveGridCols;
+  liveGridRows = rows;
+  liveGridCols = cols;
   ['control', 'apps'].forEach(tab => {
     const grid = document.querySelector(`.live-grid-${tab}`);
     if (!grid) return;
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
     grid.innerHTML = '';
     liveFlaps[tab] = [];
-    for (let i = 0; i < 45; i++) {
+    for (let i = 0; i < rows * cols; i++) {
       const el = document.createElement('div');
       el.className = 'live-flap';
       el.innerHTML = '<div class="fh ft"><span class="fc"></span></div><div class="fh fb"><span class="fc"></span></div><div class="fd"></div>';
@@ -851,14 +880,81 @@ function initLiveGrids() {
       liveFlaps[tab].push(new LiveFlap(el));
     }
   });
+  document.getElementById('simRows').value = rows;
+  document.getElementById('simCols').value = cols;
 }
-initLiveGrids();
+
+// Fetch initial grid config then init
+(async function(){
+  try {
+    const cfg = await fetch('/grid_config').then(r=>r.json());
+    initLiveGrids(cfg.rows || 3, cfg.cols || 15);
+  } catch(e) { initLiveGrids(3, 15); }
+})();
+
+async function applyGridConfig() {
+  const rows = parseInt(document.getElementById('simRows').value) || 3;
+  const cols = parseInt(document.getElementById('simCols').value) || 15;
+  await fetch('/settings', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'save_global', sim_rows:rows, sim_cols:cols})
+  });
+  initLiveGrids(rows, cols);
+  showToast(`Grid set to ${rows}x${cols}`);
+}
+
+function updateLiveFlipSpeed() {
+  liveFlipSpeedMs = parseInt(document.getElementById('liveFlipSpeed').value);
+  document.getElementById('liveFlipVal').textContent = liveFlipSpeedMs + 'ms';
+}
+
+function toggleLivePause() {
+  livePaused = !livePaused;
+  const btn = document.getElementById('livePauseBtn');
+  btn.textContent = livePaused ? 'Resume' : 'Pause';
+  btn.style.background = livePaused ? 'var(--green)' : '#444';
+}
+
+function getAnimOrderJS(style) {
+  const rows = liveGridRows, cols = liveGridCols, total = rows * cols;
+  const m = (r, c) => r * cols + c;
+  if (style === 'rtl') return Array.from({length:total},(_,i)=>total-1-i);
+  if (style === 'random') { const a=Array.from({length:total},(_,i)=>i); for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
+  if (style === 'rain') return Array.from({length:total},(_,i)=>i);
+  if (style === 'columns') { const o=[]; for(let c=0;c<cols;c++) for(let r=0;r<rows;r++) o.push(m(r,c)); return o; }
+  if (style === 'diagonal') { const o=[],s=new Set(); for(let d=0;d<rows+cols-1;d++) for(let r=0;r<rows;r++){const c=d-r; if(c>=0&&c<cols){const i=m(r,c); if(!s.has(i)){s.add(i);o.push(i);}}} return o; }
+  if (style === 'center_out') { const o=[],s=new Set(),cn=Math.floor(cols/2); for(let d=0;d<=cn;d++) for(let r=0;r<rows;r++){const cs=d===0?[cn]:[cn-d,cn+d]; for(const c of cs) if(c>=0&&c<cols){const i=m(r,c); if(!s.has(i)){s.add(i);o.push(i);}}} return o; }
+  if (style === 'spiral') { const v=Array.from({length:rows},()=>Array(cols).fill(false)),o=[]; let t=0,b=rows-1,l=0,ri=cols-1; while(t<=b&&l<=ri){for(let c=l;c<=ri;c++) if(!v[t][c]){v[t][c]=true;o.push(m(t,c));} for(let r=t+1;r<=b;r++) if(!v[r][ri]){v[r][ri]=true;o.push(m(r,ri));} if(t<b) for(let c=ri-1;c>=l;c--) if(!v[b][c]){v[b][c]=true;o.push(m(b,c));} if(l<ri) for(let r=b-1;r>t;r--) if(!v[r][l]){v[r][l]=true;o.push(m(r,l));} t++;b--;l++;ri--;} return o; }
+  return Array.from({length:total},(_,i)=>i);
+}
+
+function vizLiveOrder() {
+  const style = document.getElementById('liveVizOrder').value;
+  ['control','apps'].forEach(tab => {
+    liveFlaps[tab].forEach(f => f.el.style.outline = '');
+  });
+  if (!style) return;
+  const order = getAnimOrderJS(style);
+  order.forEach((idx, seq) => {
+    const hue = (seq / order.length) * 240;
+    ['control','apps'].forEach(tab => {
+      if (liveFlaps[tab][idx]) liveFlaps[tab][idx].el.style.outline = `2px solid hsl(${hue},80%,60%)`;
+    });
+  });
+}
 
 // ============================================================
 //  LIVE VIEW POLLING
 // ============================================================
 setInterval(()=>{
+  if (livePaused) return;
   fetch('/current_state').then(r=>r.json()).then(data=>{
+    // Rebuild grids if dimensions changed
+    const rows = data.rows || 3, cols = data.cols || 15;
+    if (rows !== liveGridRows || cols !== liveGridCols) {
+      initLiveGrids(rows, cols);
+    }
+
     // Homing overlays
     ['control','apps'].forEach(tab=>{
       const el = document.getElementById(`homing-${tab}`);
