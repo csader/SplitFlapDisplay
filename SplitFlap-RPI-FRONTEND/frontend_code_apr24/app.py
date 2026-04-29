@@ -1682,6 +1682,31 @@ def auto_tune_route():
     return jsonify(status="error", message="Unknown action"), 400
 
 
+@app.route('/tuning_status')
+def tuning_status():
+    char_idx = int(request.args.get('char_index', 0))
+    if char_idx < 0 or char_idx >= len(FLAP_CHARS):
+        return jsonify(status="error", message="Invalid char_index"), 400
+    positions = {}
+    for i in range(45):
+        mod_str = str(i)
+        cal = int(settings['calibrations'].get(mod_str, 4096))
+        expected = (char_idx * cal) // 64
+        tuned = settings['tuned_chars'].get(mod_str, {}).get(str(char_idx))
+        positions[mod_str] = {
+            'expected': expected,
+            'tuned': int(tuned) if tuned is not None else None,
+            'active': int(tuned) if tuned is not None else expected,
+        }
+    return jsonify(
+        char_index=char_idx,
+        char=FLAP_CHARS[char_idx],
+        flap_chars=FLAP_CHARS,
+        grid={'rows': 3, 'cols': 15, 'total': 45},
+        positions=positions,
+    )
+
+
 # ── Backup / Restore ─────────────────────────────────────────
 
 @app.route('/backup_settings')
