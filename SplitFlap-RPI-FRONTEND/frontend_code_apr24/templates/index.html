@@ -247,7 +247,7 @@ input:checked+.slider:before{transform:translateX(20px)}
       <label>Rows <input type="number" id="simRows" value="3" min="1" max="20"></label>
       <label>Cols <input type="number" id="simCols" value="15" min="1" max="50"></label>
       <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="applyGridConfig()">Apply</button>
-      <button class="btn btn-sm btn-secondary" id="livePauseBtn" onclick="toggleLivePause()">Pause</button>
+      <button class="btn btn-sm" id="simModeBtn" onclick="toggleSimMode()" style="margin-left:auto">SIMULATION</button>
     </div>
     <div class="preview-wrapper" style="position:relative;margin-bottom:18px">
       <div class="preview-grid live-grid-control"></div>
@@ -852,7 +852,30 @@ class LiveFlap {
 
 let liveFlipSpeedMs = 62;
 let liveGridRows = 3, liveGridCols = 15;
-let livePaused = false;
+let simMode = true;
+
+function updateSimModeBtn() {
+  const btn = document.getElementById('simModeBtn');
+  if (simMode) {
+    btn.textContent = '🔴 SIMULATION';
+    btn.style.background = '#633';
+    btn.style.color = '#f88';
+  } else {
+    btn.textContent = '🟢 LIVE';
+    btn.style.background = '#263';
+    btn.style.color = '#8f8';
+  }
+}
+
+async function toggleSimMode() {
+  simMode = !simMode;
+  updateSimModeBtn();
+  await fetch('/toggle_sim', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({enabled: simMode})
+  });
+  showToast(simMode ? 'Simulation mode — hardware output disabled' : 'Live mode — sending to hardware');
+}
 
 function initLiveGrids(rows, cols) {
   rows = rows || liveGridRows;
@@ -882,7 +905,9 @@ function initLiveGrids(rows, cols) {
   try {
     const cfg = await fetch('/grid_config').then(r=>r.json());
     initLiveGrids(cfg.rows || 3, cfg.cols || 15);
-  } catch(e) { initLiveGrids(3, 15); }
+    simMode = cfg.sim_mode !== false;
+    updateSimModeBtn();
+  } catch(e) { initLiveGrids(3, 15); updateSimModeBtn(); }
 })();
 
 async function applyGridConfig() {
@@ -896,18 +921,10 @@ async function applyGridConfig() {
   showToast(`Grid set to ${rows}x${cols}`);
 }
 
-function toggleLivePause() {
-  livePaused = !livePaused;
-  const btn = document.getElementById('livePauseBtn');
-  btn.textContent = livePaused ? 'Resume' : 'Pause';
-  btn.style.background = livePaused ? 'var(--green)' : '#444';
-}
-
 // ============================================================
 //  LIVE VIEW POLLING
 // ============================================================
 setInterval(()=>{
-  if (livePaused) return;
   fetch('/current_state').then(r=>r.json()).then(data=>{
     // Rebuild grids if dimensions changed
     const rows = data.rows || 3, cols = data.cols || 15;

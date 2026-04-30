@@ -34,9 +34,10 @@ except Exception as e:
 
 # --- GLOBAL STATE ---
 FLAP_CHARS = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$&()-+=;q:%'.,/?*roygbpw"
-current_indices = [-1] * 45
+current_indices = [-1] * 45  # resized after settings load
 current_display_string = " " * 45
 is_homed = False
+sim_mode = not ser  # auto-enable simulation if no serial hardware
 
 
 # ============================================================
@@ -336,7 +337,7 @@ def send_raw(cmd):
     if not cmd.endswith('\n'):
         cmd += '\n'
     with serial_lock:
-        if ser:
+        if ser and not sim_mode:
             ser.write(cmd.encode())
             ser.flush()
             time.sleep(0.02)
@@ -515,7 +516,7 @@ def send_to_display(text, order=None, raw=False, step_delay_ms=15):
             if i >= len(clean_text):
                 continue
             char = clean_text[i]
-            if ser:
+            if ser and not sim_mode:
                 ser.write(f"m{i:02d}-{char}\n".encode())
                 ser.flush()
                 time.sleep(step_delay_ms / 1000.0)
@@ -1444,11 +1445,17 @@ def index():
 @app.route('/current_state')
 def current_state():
     return jsonify(is_homed=is_homed, state=current_display_string, active_app=active_app,
-                   rows=get_rows(), cols=get_cols())
+                   rows=get_rows(), cols=get_cols(), sim_mode=sim_mode)
 
 @app.route('/grid_config')
 def grid_config():
-    return jsonify(rows=get_rows(), cols=get_cols(), total=get_module_count())
+    return jsonify(rows=get_rows(), cols=get_cols(), total=get_module_count(), sim_mode=sim_mode)
+
+@app.route('/toggle_sim', methods=['POST'])
+def toggle_sim():
+    global sim_mode
+    sim_mode = request.json.get('enabled', True)
+    return jsonify(sim_mode=sim_mode)
 
 @app.route('/settings', methods=['GET', 'POST'])
 def handle_settings():
