@@ -247,13 +247,6 @@ input:checked+.slider:before{transform:translateX(20px)}
       <label>Rows <input type="number" id="simRows" value="3" min="1" max="20"></label>
       <label>Cols <input type="number" id="simCols" value="15" min="1" max="50"></label>
       <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="applyGridConfig()">Apply</button>
-      <label>Flip <input type="range" id="liveFlipSpeed" min="30" max="300" value="40" oninput="updateLiveFlipSpeed()"> <span id="liveFlipVal">40ms</span></label>
-      <label>Order <select id="liveVizOrder" onchange="vizLiveOrder()">
-        <option value="">None</option><option value="ltr">LTR</option><option value="rtl">RTL</option>
-        <option value="center_out">Center Out</option><option value="spiral">Spiral</option>
-        <option value="diagonal">Diagonal</option><option value="random">Random</option>
-        <option value="columns">Columns</option><option value="rain">Rain</option>
-      </select></label>
       <button class="btn btn-sm btn-secondary" id="livePauseBtn" onclick="toggleLivePause()">Pause</button>
     </div>
     <div class="preview-wrapper" style="position:relative;margin-bottom:18px">
@@ -857,7 +850,7 @@ class LiveFlap {
   }
 }
 
-let liveFlipSpeedMs = 40;
+let liveFlipSpeedMs = 62;
 let liveGridRows = 3, liveGridCols = 15;
 let livePaused = false;
 
@@ -903,44 +896,11 @@ async function applyGridConfig() {
   showToast(`Grid set to ${rows}x${cols}`);
 }
 
-function updateLiveFlipSpeed() {
-  liveFlipSpeedMs = parseInt(document.getElementById('liveFlipSpeed').value);
-  document.getElementById('liveFlipVal').textContent = liveFlipSpeedMs + 'ms';
-}
-
 function toggleLivePause() {
   livePaused = !livePaused;
   const btn = document.getElementById('livePauseBtn');
   btn.textContent = livePaused ? 'Resume' : 'Pause';
   btn.style.background = livePaused ? 'var(--green)' : '#444';
-}
-
-function getAnimOrderJS(style) {
-  const rows = liveGridRows, cols = liveGridCols, total = rows * cols;
-  const m = (r, c) => r * cols + c;
-  if (style === 'rtl') return Array.from({length:total},(_,i)=>total-1-i);
-  if (style === 'random') { const a=Array.from({length:total},(_,i)=>i); for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
-  if (style === 'rain') return Array.from({length:total},(_,i)=>i);
-  if (style === 'columns') { const o=[]; for(let c=0;c<cols;c++) for(let r=0;r<rows;r++) o.push(m(r,c)); return o; }
-  if (style === 'diagonal') { const o=[],s=new Set(); for(let d=0;d<rows+cols-1;d++) for(let r=0;r<rows;r++){const c=d-r; if(c>=0&&c<cols){const i=m(r,c); if(!s.has(i)){s.add(i);o.push(i);}}} return o; }
-  if (style === 'center_out') { const o=[],s=new Set(),cn=Math.floor(cols/2); for(let d=0;d<=cn;d++) for(let r=0;r<rows;r++){const cs=d===0?[cn]:[cn-d,cn+d]; for(const c of cs) if(c>=0&&c<cols){const i=m(r,c); if(!s.has(i)){s.add(i);o.push(i);}}} return o; }
-  if (style === 'spiral') { const v=Array.from({length:rows},()=>Array(cols).fill(false)),o=[]; let t=0,b=rows-1,l=0,ri=cols-1; while(t<=b&&l<=ri){for(let c=l;c<=ri;c++) if(!v[t][c]){v[t][c]=true;o.push(m(t,c));} for(let r=t+1;r<=b;r++) if(!v[r][ri]){v[r][ri]=true;o.push(m(r,ri));} if(t<b) for(let c=ri-1;c>=l;c--) if(!v[b][c]){v[b][c]=true;o.push(m(b,c));} if(l<ri) for(let r=b-1;r>t;r--) if(!v[r][l]){v[r][l]=true;o.push(m(r,l));} t++;b--;l++;ri--;} return o; }
-  return Array.from({length:total},(_,i)=>i);
-}
-
-function vizLiveOrder() {
-  const style = document.getElementById('liveVizOrder').value;
-  ['control','apps'].forEach(tab => {
-    liveFlaps[tab].forEach(f => f.el.style.outline = '');
-  });
-  if (!style) return;
-  const order = getAnimOrderJS(style);
-  order.forEach((idx, seq) => {
-    const hue = (seq / order.length) * 240;
-    ['control','apps'].forEach(tab => {
-      if (liveFlaps[tab][idx]) liveFlaps[tab][idx].el.style.outline = `2px solid hsl(${hue},80%,60%)`;
-    });
-  });
 }
 
 // ============================================================
