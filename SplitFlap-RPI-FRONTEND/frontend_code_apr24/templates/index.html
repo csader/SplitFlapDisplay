@@ -247,7 +247,11 @@ input:checked+.slider:before{transform:translateX(20px)}
       <label>Rows <input type="number" id="simRows" value="3" min="1" max="20"></label>
       <label>Cols <input type="number" id="simCols" value="15" min="1" max="50"></label>
       <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="applyGridConfig()">Apply</button>
-      <button class="btn btn-sm" id="simModeBtn" onclick="toggleSimMode()" style="margin-left:auto">SIMULATION</button>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        <span id="simModeLabel" style="font-size:.82rem;font-weight:bold;color:#f88">SIMULATION</span>
+        <label class="switch"><input type="checkbox" id="simModeToggle" onchange="toggleSimMode()"><span class="slider"></span></label>
+        <span style="font-size:.82rem;color:#888">LIVE</span>
+      </div>
     </div>
     <div class="preview-wrapper" style="position:relative;margin-bottom:18px">
       <div class="preview-grid live-grid-control"></div>
@@ -854,22 +858,18 @@ let liveFlipSpeedMs = 62;
 let liveGridRows = 3, liveGridCols = 15;
 let simMode = true;
 
-function updateSimModeBtn() {
-  const btn = document.getElementById('simModeBtn');
-  if (simMode) {
-    btn.textContent = '🔴 SIMULATION';
-    btn.style.background = '#633';
-    btn.style.color = '#f88';
-  } else {
-    btn.textContent = '🟢 LIVE';
-    btn.style.background = '#263';
-    btn.style.color = '#8f8';
-  }
+function updateSimModeUI() {
+  const toggle = document.getElementById('simModeToggle');
+  const label = document.getElementById('simModeLabel');
+  toggle.checked = !simMode;  // checked = LIVE, unchecked = SIMULATION
+  label.textContent = simMode ? 'SIMULATION' : 'LIVE';
+  label.style.color = simMode ? '#f88' : '#8f8';
 }
 
 async function toggleSimMode() {
-  simMode = !simMode;
-  updateSimModeBtn();
+  const toggle = document.getElementById('simModeToggle');
+  simMode = !toggle.checked;  // checked = LIVE (sim off), unchecked = SIM (sim on)
+  updateSimModeUI();
   await fetch('/toggle_sim', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({enabled: simMode})
@@ -906,8 +906,8 @@ function initLiveGrids(rows, cols) {
     const cfg = await fetch('/grid_config').then(r=>r.json());
     initLiveGrids(cfg.rows || 3, cfg.cols || 15);
     simMode = cfg.sim_mode !== false;
-    updateSimModeBtn();
-  } catch(e) { initLiveGrids(3, 15); updateSimModeBtn(); }
+    updateSimModeUI();
+  } catch(e) { initLiveGrids(3, 15); updateSimModeUI(); }
 })();
 
 async function applyGridConfig() {
