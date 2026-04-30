@@ -341,6 +341,20 @@ input:checked+.slider:before{transform:translateX(20px)}
     <div class="apps-grid" id="appsGrid">
       <!-- Populated by JS -->
     </div>
+
+    <!-- App Library -->
+    <div style="margin-top:28px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">📚 App Library</h3>
+        <button class="btn btn-secondary btn-sm" onclick="loadAppLibrary()">↻ Refresh</button>
+      </div>
+      <p style="color:#888;margin-top:0;font-size:.85rem">Install community apps from the repository</p>
+      <div class="apps-grid" id="appLibraryGrid">
+        <div style="color:#666;font-style:italic;font-size:.85rem;grid-column:1/-1;text-align:center;padding:20px">
+          Tap Refresh to load available apps
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ══════════ TUNING PAGE ══════════ -->
@@ -978,7 +992,7 @@ function switchTab(name){
   document.getElementById('tab-'+name).classList.add('active');
   document.getElementById('page-'+name).classList.add('active');
   if(name==='tuning') loadSettingsData();
-  if(name==='apps') buildAppsGrid();
+  if(name==='apps'){ buildAppsGrid(); loadAppLibrary(); }
 }
 
 // ============================================================
@@ -1280,28 +1294,113 @@ function deleteSavedPlaylist(encodedName){
 // ============================================================
 //  APPS TAB
 // ============================================================
-function buildAppsGrid(){
+async function buildAppsGrid(){
   const grid = document.getElementById('appsGrid');
-  if(grid.children.length) return; // already built
-  APP_LIST.forEach(a=>{
-    const div = document.createElement('div');
-    div.className = 'app-card';
-    div.dataset.app = a.key;
-    div.onclick = ()=>runApp(a.key);
-    const hasCfg = !!APP_SETTINGS_CONFIG[a.key];
-    div.innerHTML = `
-      ${hasCfg?`<button class="app-gear" title="Settings" onclick="event.stopPropagation();openAppSettings('${a.key}')">⚙️</button>`:''}
-      <span class="app-icon">${a.icon}</span>
-      <span class="app-name">${a.name}</span>
-      <span class="app-desc">${a.desc}</span>`;
-    grid.appendChild(div);
-  });
+  grid.innerHTML = '';
+
+  // Built-in apps
+  APP_LIST.forEach(a => grid.appendChild(buildAppCard(a, false)));
+
+  // Installed plugin apps
+  try {
+    const res = await fetch('/installed_apps');
+    const data = await res.json();
+    const pluginConfigs = data.settings_config || {};
+    Object.assign(APP_SETTINGS_CONFIG, pluginConfigs);
+    (data.apps || []).forEach(a => grid.appendChild(buildAppCard(a, true)));
+  } catch(e) { console.error('Failed to load plugins:', e); }
+}
+
+function buildAppCard(a, isPlugin) {
+  const div = document.createElement('div');
+  div.className = 'app-card';
+  div.dataset.app = a.key;
+  div.onclick = () => runApp(a.key);
+  const hasCfg = !!APP_SETTINGS_CONFIG[a.key];
+  div.innerHTML = `
+    ${hasCfg ? `<button class="app-gear" title="Settings" onclick="event.stopPropagation();openAppSettings('${a.key}')">⚙️</button>` : ''}
+    ${isPlugin ? '<span style="position:absolute;top:6px;left:6px;font-size:.6rem;color:#888;background:#222;padding:1px 4px;border-radius:3px">PLUGIN</span>' : ''}
+    <span class="app-icon">${a.icon}</span>
+    <span class="app-name">${a.name}</span>
+    <span class="app-desc">${a.desc}</span>`;
+  return div;
 }
 
 function runApp(appKey){
   fetch('/run_app',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({app:appKey})});
-  const label = (APP_LIST.find(a=>a.key===appKey)||{name:appKey}).name;
+  const label = (APP_LIST.find(a=>a.key===appKey)||{name:appKey.replace('plugin_','').replace(/-/g,' ')}).name;
   showToast(`▶ ${label} started`);
+}
+
+// ── App Library ──────────────────────────────────────────────
+async function loadAppLibrary(){
+  const grid = document.getElementById('appLibraryGrid');
+  grid.innerHTML = '<div style="color:#888;grid-column:1/-1;text-align:center;padding:20px">Loading...</div>';
+  try {
+    const res = await fetch('/app_library');
+    const data = await res.json();
+    const apps = data.apps || [];
+    if(!apps.length){
+      grid.innerHTML = '<div style="color:#666;grid-column:1/-1;text-align:center;padding:20px">No apps available</div>';
+      return;
+    }
+    grid.innerHTML = '';
+    apps.forEach(a => {
+      const div = document.createElement('div');
+      div.className = 'app-card';
+      div.style.cursor = 'default';
+      div.innerHTML = `
+        <span class="app-icon">${a.icon||'🧩'}</span>
+        <span class="app-name">${a.name}</span>
+        <span class="app-desc">${a.description||''}</span>
+        <span style="display:inline-block;font-size:.65rem;color:#888;background:#222;padding:2px 6px;border-radius:4px;margin-top:4px">${a.type} · v${a.version||'?'}</span>
+        <div style="margin-top:8px">
+          ${a.installed
+            ? '<button class="btn-del" style="width:100%;padding:8px;border-radius:6px;font-size:.8rem" onclick="event.stopPropagation();uninstallApp(\''+a.id+'\')">Uninstall</button>'
+            : '<button class="btn btn-success btn-sm" style="width:100%" onclick="event.stopPropagation();installApp(\''+a.id+'\')">Install</button>'
+          }
+        </div>`;
+      grid.appendChild(div);
+    });
+  } catch(e){
+    grid.innerHTML = '<div style="color:var(--red);grid-column:1/-1;text-align:center;padding:20px">Failed to load library</div>';
+  }
+}
+
+async function installApp(appId){
+  showToast('Installing '+appId+'...');
+  try {
+    const res = await fetch('/app_library/install',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:appId})
+    });
+    const data = await res.json();
+    if(data.status==='success'){
+      showToast(appId+' installed');
+      await buildAppsGrid();
+      loadAppLibrary();
+    } else {
+      showToast(data.message||'Install failed','error');
+    }
+  } catch(e){ showToast('Install failed','error'); }
+}
+
+async function uninstallApp(appId){
+  if(!confirm('Uninstall "'+appId+'"?')) return;
+  try {
+    const res = await fetch('/app_library/uninstall',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:appId})
+    });
+    const data = await res.json();
+    if(data.status==='success'){
+      showToast(appId+' uninstalled','warn');
+      await buildAppsGrid();
+      loadAppLibrary();
+    } else {
+      showToast(data.message||'Uninstall failed','error');
+    }
+  } catch(e){ showToast('Uninstall failed','error'); }
 }
 
 // ── Per-app settings modal ──────────────────────────────────

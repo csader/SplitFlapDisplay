@@ -8,6 +8,9 @@ import random
 import requests
 import pytz
 import yfinance as yf
+import importlib.util
+import urllib.request
+import shutil
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 
@@ -20,6 +23,7 @@ except ImportError:
 SERIAL_PORT = '/dev/ttyUSB0'
 BAUD_RATE = 9600
 CONFIG_PATH = "/home/gordo/splitflap/settings.json"
+PLUGIN_APPS_PATH = os.path.expanduser("~/.splitflap/apps")
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -90,6 +94,7 @@ def load_settings():
         "mqtt_password": "",
         "sim_rows": 3,
         "sim_cols": 15,
+        "app_library_url": "https://raw.githubusercontent.com/csader/SplitFlapDisplay/main/apps",
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -774,6 +779,154 @@ def format_lines(*lines, cols=None):
     padded = list(lines) + [''] * (rows - len(lines))
     return ''.join(l.center(cols)[:cols] for l in padded[:rows])
 
+
+# ============================================================
+#  PLUGIN SYSTEM
+# ============================================================
+# SECURITY NOTE: Functional plugins execute arbitrary Python code.
+# Only install apps from trusted sources. Plugins run with the same
+# permissions as this Flask app. There is no sandboxing.
+
+_plugin_registry = {}
+_plugin_modules = {}
+_plugin_data = {}
+_plugin_caches = {}
+_registry_cache = {'data': None, 'fetched_at': 0}
+
+
+def load_installed_plugins():
+    global _plugin_registry, _plugin_modules, _plugin_data
+    _plugin_registry.clear()
+    _plugin_modules.clear()
+    _plugin_data.clear()
+    if not os.path.isdir(PLUGIN_APPS_PATH):
+        return
+    for app_id in os.listdir(PLUGIN_APPS_PATH):
+        app_dir = os.path.join(PLUGIN_APPS_PATH, app_id)
+        manifest_path = os.path.join(app_dir, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            continue
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+            manifest["id"] = app_id
+            _plugin_registry[app_id] = manifest
+            if manifest.get("type") == "channel":
+                _load_channel_data(app_id, app_dir)
+            elif manifest.get("type") == "functional":
+                _load_functional_module(app_id, app_dir)
+            logging.info(f"Plugin loaded: {app_id} ({manifest.get('type')})")
+        except Exception as e:
+            logging.error(f"Failed to load plugin {app_id}: {e}")
+
+
+def _load_channel_data(app_id, app_dir):
+    data_path = os.path.join(app_dir, "data.json")
+    if not os.path.isfile(data_path):
+        return
+    try:
+        with open(data_path, "r") as f:
+            data = json.load(f)
+        pages = []
+        for page in data.get("pages", []):
+            if isinstance(page, str):
+                pages.append(page)
+            elif isinstance(page, dict) and "lines" in page:
+                pages.append(format_lines(*page["lines"]))
+        _plugin_data[app_id] = pages
+    except Exception as e:
+        logging.error(f"Plugin {app_id}: error loading data.json: {e}")
+
+
+def _load_functional_module(app_id, app_dir):
+    module_path = os.path.join(app_dir, "app.py")
+    if not os.path.isfile(module_path):
+        return
+    try:
+        spec = importlib.util.spec_from_file_location(f"plugin_{app_id}", module_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if hasattr(mod, "fetch") and callable(mod.fetch):
+            _plugin_modules[app_id] = mod
+        else:
+            logging.error(f"Plugin {app_id}: app.py has no fetch() function")
+    except Exception as e:
+        logging.error(f"Plugin {app_id}: error importing app.py: {e}")
+
+
+def get_plugin_pages(app_id):
+    manifest = _plugin_registry.get(app_id)
+    if not manifest:
+        return [format_lines("PLUGIN ERROR", app_id.upper()[:get_cols()], "NOT FOUND")]
+    app_type = manifest.get("type")
+    refresh_interval = manifest.get("refresh_interval", 300)
+
+    if app_type == "channel":
+        pages = _plugin_data.get(app_id, [])
+        return pages or [format_lines(manifest.get("name", app_id).upper()[:get_cols()], "NO DATA", "")]
+
+    elif app_type == "functional":
+        mod = _plugin_modules.get(app_id)
+        if not mod:
+            return [format_lines("PLUGIN ERROR", app_id.upper()[:get_cols()], "NOT LOADED")]
+        now = time.time()
+        cached = _plugin_caches.get(app_id)
+        if cached and (now - cached["fetched_at"]) < refresh_interval:
+            return cached["pages"]
+        try:
+            plugin_settings = {}
+            for s in manifest.get("settings", []):
+                key = f"plugin_{app_id}_{s['key']}"
+                plugin_settings[s["key"]] = settings.get(key, s.get("default", ""))
+            pages = mod.fetch(plugin_settings, format_lines, get_rows, get_cols)
+            if not isinstance(pages, list):
+                pages = [str(pages)]
+            _plugin_caches[app_id] = {"pages": pages, "fetched_at": now}
+            return pages
+        except Exception as e:
+            logging.error(f"Plugin {app_id} fetch error: {e}")
+            cached_pages = _plugin_caches.get(app_id, {}).get("pages")
+            return cached_pages or [format_lines("PLUGIN ERROR", app_id.upper()[:get_cols()], str(e)[:get_cols()])]
+
+    return [format_lines("PLUGIN ERROR", "UNKNOWN TYPE", "")]
+
+
+def get_plugin_app_list():
+    entries = []
+    for app_id, manifest in _plugin_registry.items():
+        entries.append({
+            "key": f"plugin_{app_id}",
+            "icon": manifest.get("icon", "🧩"),
+            "name": manifest.get("name", app_id),
+            "desc": manifest.get("description", "")[:30],
+            "plugin": True,
+            "plugin_id": app_id,
+        })
+    return entries
+
+
+def get_plugin_settings_config():
+    configs = {}
+    for app_id, manifest in _plugin_registry.items():
+        fields = []
+        for s in manifest.get("settings", []):
+            fields.append({
+                "key": f"plugin_{app_id}_{s['key']}",
+                "label": s.get("label", s["key"]),
+                "type": s.get("type", "text"),
+                "ph": s.get("default", ""),
+            })
+        configs[f"plugin_{app_id}"] = {
+            "title": f"{manifest.get('icon', '🧩')} {manifest.get('name', app_id)}",
+            "fields": fields,
+        }
+    return configs
+
+
+os.makedirs(PLUGIN_APPS_PATH, exist_ok=True)
+load_installed_plugins()
+
+
 def fetch_weather_data():
     api_key  = settings.get("weather_api_key", "").strip()
     zip_code = settings.get("zip_code", "02118").strip()
@@ -1379,6 +1532,10 @@ def playlist_loop():
                 stop_event.clear()
             continue
 
+        elif active_app and active_app.startswith('plugin_'):
+            plugin_id = active_app[7:]
+            display_pages = get_plugin_pages(plugin_id)
+
         else:
             display_pages = current_playlist
 
@@ -1391,6 +1548,10 @@ def playlist_loop():
             eff_delay = max(0.1, float(settings.get('anim_speed', '0.4')))
         elif active_app in ('countdown', 'world_clock', 'time', 'date'):
             eff_delay = 1.0
+        elif active_app and active_app.startswith('plugin_'):
+            plugin_id = active_app[7:]
+            manifest = _plugin_registry.get(plugin_id, {})
+            eff_delay = float(manifest.get('loop_delay', loop_delay))
         else:
             eff_delay = float(loop_delay)
 
@@ -1479,8 +1640,12 @@ def handle_settings():
                 'sports_ufc',
                 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_user', 'mqtt_password',
                 'sim_rows', 'sim_cols',
+                'app_library_url',
             ]
             settings.update({k: data[k] for k in keys if k in data})
+            for k, v in data.items():
+                if k.startswith("plugin_"):
+                    settings[k] = v
             if 'sim_rows' in data or 'sim_cols' in data:
                 resize_grid()
             save_settings(settings)
@@ -1621,6 +1786,10 @@ def run_app():
             loop_delay = 25
     elif active_app and active_app.startswith('anim_'):
         loop_delay = max(0.1, float(settings.get('anim_speed', '0.4')))
+    elif active_app and active_app.startswith('plugin_'):
+        plugin_id = active_app[7:]
+        manifest = _plugin_registry.get(plugin_id, {})
+        loop_delay = float(manifest.get('loop_delay', 5))
     else:
         loop_delay = 5
 
@@ -1815,6 +1984,109 @@ def delete_playlist(name):
         settings['saved_playlists'] = plists
         save_settings(settings)
     return jsonify(status="deleted")
+
+
+# ============================================================
+#  APP LIBRARY API
+# ============================================================
+
+@app.route('/app_library')
+def app_library():
+    now = time.time()
+    if _registry_cache['data'] and (now - _registry_cache['fetched_at']) < 300:
+        return jsonify(_registry_cache['data'])
+    try:
+        base_url = settings.get('app_library_url', 'https://raw.githubusercontent.com/csader/SplitFlapDisplay/main/apps')
+        url = f"{base_url}/registry.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "SplitFlap/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        for app_entry in data.get("apps", []):
+            app_entry["installed"] = app_entry["id"] in _plugin_registry
+        _registry_cache['data'] = data
+        _registry_cache['fetched_at'] = now
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"App library fetch error: {e}")
+        if _registry_cache['data']:
+            return jsonify(_registry_cache['data'])
+        return jsonify({"error": str(e), "apps": []}), 502
+
+
+@app.route('/app_library/install', methods=['POST'])
+def app_library_install():
+    global active_app
+    app_id = request.json.get("id", "").strip()
+    if not app_id:
+        return jsonify(status="error", message="No app ID"), 400
+    if app_id in _plugin_registry:
+        return jsonify(status="error", message="Already installed"), 409
+
+    app_dir = os.path.join(PLUGIN_APPS_PATH, app_id)
+    base_url = settings.get('app_library_url', 'https://raw.githubusercontent.com/csader/SplitFlapDisplay/main/apps')
+    try:
+        os.makedirs(app_dir, exist_ok=True)
+        manifest_url = f"{base_url}/{app_id}/manifest.json"
+        req = urllib.request.Request(manifest_url, headers={"User-Agent": "SplitFlap/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            manifest_bytes = resp.read()
+        with open(os.path.join(app_dir, "manifest.json"), "wb") as f:
+            f.write(manifest_bytes)
+
+        manifest = json.loads(manifest_bytes.decode())
+        app_type = manifest.get("type", "channel")
+
+        if app_type == "channel":
+            data_url = f"{base_url}/{app_id}/data.json"
+            req = urllib.request.Request(data_url, headers={"User-Agent": "SplitFlap/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                with open(os.path.join(app_dir, "data.json"), "wb") as f:
+                    f.write(resp.read())
+        elif app_type == "functional":
+            code_url = f"{base_url}/{app_id}/app.py"
+            req = urllib.request.Request(code_url, headers={"User-Agent": "SplitFlap/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                with open(os.path.join(app_dir, "app.py"), "wb") as f:
+                    f.write(resp.read())
+
+        load_installed_plugins()
+        _registry_cache['fetched_at'] = 0
+        return jsonify(status="success", id=app_id)
+    except Exception as e:
+        if os.path.isdir(app_dir):
+            shutil.rmtree(app_dir, ignore_errors=True)
+        logging.error(f"Install error for {app_id}: {e}")
+        return jsonify(status="error", message=str(e)), 500
+
+
+@app.route('/app_library/uninstall', methods=['POST'])
+def app_library_uninstall():
+    global active_app
+    app_id = request.json.get("id", "").strip()
+    if not app_id:
+        return jsonify(status="error", message="No app ID"), 400
+    app_dir = os.path.join(PLUGIN_APPS_PATH, app_id)
+    if not os.path.isdir(app_dir):
+        return jsonify(status="error", message="Not installed"), 404
+    if active_app == f"plugin_{app_id}":
+        active_app = None
+        stop_event.set()
+    try:
+        shutil.rmtree(app_dir)
+        load_installed_plugins()
+        _registry_cache['fetched_at'] = 0
+        return jsonify(status="success", id=app_id)
+    except Exception as e:
+        logging.error(f"Uninstall error for {app_id}: {e}")
+        return jsonify(status="error", message=str(e)), 500
+
+
+@app.route('/installed_apps')
+def installed_apps():
+    return jsonify(
+        apps=get_plugin_app_list(),
+        settings_config=get_plugin_settings_config(),
+    )
 
 
 if __name__ == '__main__':
